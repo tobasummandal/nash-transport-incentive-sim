@@ -173,3 +173,8 @@ temp/
 .env.*
 credentials.json
 secrets.yaml
+
+# Project Specific
+Tobasum CS 3860 Research Proposal.pdf
+report/
+hytch data info/

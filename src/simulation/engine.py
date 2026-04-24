@@ -15,6 +15,8 @@ import numpy as np
 
 from ..agents.base import BaseAgent, TravelMode, TripAttributes
 from ..agents.behavioral import LogitModel
+from ..incentives.base import BaseIncentive, IncentiveAllocation
+from ..optimization import Allocator, AlwaysAllocator, OfferRequest
 from .events import (
     Event,
     EventType,
@@ -70,6 +72,8 @@ class SimulationEngine:
         config: SimulationConfig,
         network: Optional[SimpleNetwork] = None,
         rng: Optional[np.random.Generator] = None,
+        incentives: Optional[list[BaseIncentive]] = None,
+        allocator: Optional[Allocator] = None,
     ):
         self.config = config
         self.network = network or SimpleNetwork()
@@ -80,6 +84,14 @@ class SimulationEngine:
 
         # Agents
         self.agents: dict[str, BaseAgent] = {}
+
+        # Incentives & allocator
+        self.incentives: list[BaseIncentive] = incentives or []
+        self.allocator: Allocator = allocator or AlwaysAllocator()
+        # agent_id -> list of (incentive, allocation) pairs awaiting completion
+        self._pending_allocations: dict[
+            str, list[tuple[BaseIncentive, IncentiveAllocation]]
+        ] = {}
 
         # Metrics
         self.metrics = MetricsCollector(snapshot_interval=config.metrics_interval)
@@ -249,14 +261,27 @@ class SimulationEngine:
             "corridor_id": corridor_id,
             "expected_travel_time": travel_time,
             "distance": distance,
+            "incentive": 0.0,
         }
+
+        # Offer incentives at departure (may flag trip as passenger-mode)
+        self._offer_incentives(agent_id, self.active_trips[agent_id])
 
         # Record departure
         self.metrics.record_departure(agent_id, mode, corridor_id)
 
-        # Update corridor volume
-        if corridor_id and corridor_id in self.network.corridors:
-            self.network.corridors[corridor_id].current_volume += 1
+        # Update corridor volume — a successful carpool offer turns this
+        # trip into a shared ride, so no additional vehicle enters the
+        # corridor. This is the hook by which incentives reduce congestion.
+        displaces_vehicle = self.active_trips[agent_id].get(
+            "displaces_vehicle", False
+        )
+        if (
+            corridor_id
+            and corridor_id in self.network.corridors
+            and not displaces_vehicle
+        ):
+            self.network.corridors[corridor_id].add_vehicle()
 
         # Schedule arrival
         arrival_event = create_arrival_event(
@@ -284,6 +309,9 @@ class SimulationEngine:
         if not trip_info:
             return
 
+        # Complete any pending incentive allocations for this trip
+        self._complete_incentives(agent_id, trip_info, event.time)
+
         # Record trip
         trip_record = TripRecord(
             agent_id=agent_id,
@@ -299,12 +327,14 @@ class SimulationEngine:
         )
         self.metrics.record_trip(trip_record)
 
-        # Update corridor volume
+        # Update corridor volume (mirror the departure-side displacement check)
         corridor_id = trip_info.get("corridor_id")
-        if corridor_id and corridor_id in self.network.corridors:
-            self.network.corridors[corridor_id].current_volume = max(
-                0, self.network.corridors[corridor_id].current_volume - 1
-            )
+        if (
+            corridor_id
+            and corridor_id in self.network.corridors
+            and not trip_info.get("displaces_vehicle", False)
+        ):
+            self.network.corridors[corridor_id].remove_vehicle()
 
     def _handle_mode_choice(self, event: Event) -> None:
         """Handle mode choice decision."""
@@ -445,6 +475,170 @@ class SimulationEngine:
         # This triggers egress behavior
         event.data["event_ended"] = True
 
+    def _offer_incentives(self, agent_id: str, trip_info: dict) -> None:
+        """
+        Offer each configured incentive to the agent at departure.
+
+        For every incentive whose eligibility checks pass, ask the allocator
+        whether this offer is a good use of remaining budget. Accepted offers
+        are parked in _pending_allocations until the trip completes.
+        """
+        if not self.incentives:
+            return
+
+        context = self._build_offer_context(agent_id, trip_info)
+        agent = self.agents.get(agent_id)
+
+        for incentive in self.incentives:
+            if not incentive.config.enabled:
+                continue
+
+            is_eligible, _ = incentive.check_eligibility(agent_id, context)
+            if not is_eligible:
+                continue
+
+            expected_reward = incentive.compute_reward(agent_id, context)
+            if expected_reward <= 0:
+                continue
+
+            # Reserve against in-flight allocations: budget_daily already
+            # counts total_allocated, so subtract that (not just total_spent)
+            # to avoid over-committing while trips are still running.
+            effective_remaining = max(
+                0.0, incentive.config.budget_daily - incentive.total_allocated
+            )
+            if expected_reward > effective_remaining:
+                continue
+
+            request = OfferRequest(
+                agent_id=agent_id,
+                incentive_type=incentive.incentive_type.name,
+                expected_reward=expected_reward,
+                score=self._score_offer(incentive, context, expected_reward),
+                context=context,
+            )
+            if not self.allocator.should_offer(request, effective_remaining):
+                continue
+
+            result = incentive.offer_incentive(agent_id, context)
+            if not result.success or result.allocation is None:
+                continue
+
+            # Ask the agent whether to accept
+            accepted = True
+            if agent is not None and hasattr(agent, "respond_to_incentive"):
+                accepted = bool(
+                    agent.respond_to_incentive(
+                        incentive_type=incentive.incentive_type.name.lower(),
+                        incentive_amount=result.allocation.amount,
+                        conditions=result.allocation.conditions,
+                    )
+                )
+
+            if not accepted:
+                result.allocation.status = "rejected"
+                continue
+
+            incentive.accept_incentive(result.allocation.allocation_id)
+            self._pending_allocations.setdefault(agent_id, []).append(
+                (incentive, result.allocation)
+            )
+
+            # Carpool acceptance removes this agent's vehicle from the
+            # network: they are a passenger, not a driver.
+            if incentive.incentive_type.name == "CARPOOL":
+                trip_info["displaces_vehicle"] = True
+
+    def _complete_incentives(
+        self, agent_id: str, trip_info: dict, arrival_time: float
+    ) -> None:
+        """Settle all pending incentive allocations for an agent's completed trip."""
+        pending = self._pending_allocations.pop(agent_id, [])
+        total_earned = 0.0
+
+        for incentive, allocation in pending:
+            outcome = self._build_completion_outcome(trip_info, arrival_time)
+            result = incentive.complete_incentive(allocation.allocation_id, outcome)
+            if result.success and result.allocation is not None:
+                total_earned += result.allocation.actual_reward
+                self.allocator.observe_completion(
+                    OfferRequest(
+                        agent_id=agent_id,
+                        incentive_type=incentive.incentive_type.name,
+                        expected_reward=allocation.amount,
+                        score=0.0,
+                    ),
+                    actual_cost=result.allocation.actual_reward,
+                )
+
+        if total_earned > 0:
+            trip_info["incentive"] = trip_info.get("incentive", 0.0) + total_earned
+            agent = self.agents.get(agent_id)
+            if agent is not None:
+                agent.state.incentives_earned += total_earned
+
+    def _build_offer_context(self, agent_id: str, trip_info: dict) -> dict:
+        """Build context dict passed to incentive eligibility/reward calls."""
+        hour = int((self.current_time / 3600) % 24)
+        agent = self.agents.get(agent_id)
+        carpool_eligible = True
+        has_car = True
+        if agent is not None and hasattr(agent, "profile"):
+            carpool_eligible = getattr(agent.profile, "carpool_eligible", True)
+            has_car = getattr(agent.profile, "has_car", True)
+
+        return {
+            "timestamp": self.current_time,
+            "hour": hour,
+            "day_of_week": 0,  # weekday default — extend when calendar added
+            "corridor_id": trip_info.get("corridor_id"),
+            "distance_miles": trip_info.get("distance", 0.0),
+            "expected_distance_miles": trip_info.get("distance", 0.0),
+            "expected_smoothness": 0.8,
+            "n_passengers": 1,
+            "is_driver": trip_info.get("mode") in ("drive", "drive_alone", "carpool"),
+            "carpool_eligible": carpool_eligible,
+            "has_car": has_car,
+            "enrolled_corridors": [trip_info.get("corridor_id")],
+            "original_departure_time": trip_info.get("departure_time", 0.0),
+            "shifted_departure_time": trip_info.get("departure_time", 0.0),
+            "flexibility_window": 900,
+        }
+
+    def _build_completion_outcome(self, trip_info: dict, arrival_time: float) -> dict:
+        """Build outcome dict for incentive completion verification."""
+        hour = int((arrival_time / 3600) % 24)
+        distance = trip_info.get("distance", 0.0)
+        return {
+            "timestamp": arrival_time,
+            "trip_completed": True,
+            "actual_passengers": 1,
+            "is_driver": True,
+            "actual_distance_miles": distance,
+            "distance_miles": distance,
+            "completion_hour": hour,
+            "hour": hour,
+            "smoothness_score": 0.85,
+            "actual_departure_time": trip_info.get("departure_time", 0.0),
+        }
+
+    def _score_offer(
+        self,
+        incentive: BaseIncentive,
+        context: dict,
+        expected_reward: float,
+    ) -> float:
+        """
+        Score an offer for the allocator (higher = more valuable).
+
+        Heuristic: reward capped by distance — offers on longer trips during
+        peak hours have higher congestion-reduction potential per dollar.
+        """
+        distance = context.get("distance_miles", 0.0)
+        hour = context.get("hour", 8)
+        peak_boost = 1.5 if hour in {7, 8, 9, 17, 18, 19} else 1.0
+        return distance * peak_boost
+
     def _schedule_pacing_updates(
         self,
         agent_id: str,
@@ -482,6 +676,8 @@ def run_simulation(
     agents: list[BaseAgent],
     network: Optional[SimpleNetwork] = None,
     departures: Optional[list[dict]] = None,
+    incentives: Optional[list[BaseIncentive]] = None,
+    allocator: Optional[Allocator] = None,
 ) -> SimulationResult:
     """
     Convenience function to run a simulation.
@@ -491,11 +687,15 @@ def run_simulation(
         agents: List of agents
         network: Road network (optional)
         departures: List of departure events to schedule
+        incentives: List of incentive mechanisms (optional)
+        allocator: Budget allocation strategy (optional, defaults to AlwaysAllocator)
 
     Returns:
         SimulationResult
     """
-    engine = SimulationEngine(config, network)
+    engine = SimulationEngine(
+        config, network, incentives=incentives, allocator=allocator
+    )
     engine.add_agents(agents)
 
     # Schedule departures

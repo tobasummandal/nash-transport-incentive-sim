@@ -24,9 +24,16 @@ class Corridor:
     num_lanes: int = 3
     direction: str = "inbound"  # inbound or outbound
 
+    # BPR volume-delay parameters. Defaults follow the TRB-recommended
+    # freeway values (Spiess 1990) which are stronger than the original
+    # BPR(0.15, 4.0) and produce realistic peak-hour slowdowns.
+    bpr_alpha: float = 0.83
+    bpr_beta: float = 5.5
+
     # Current state
     current_volume: float = 0.0
     current_speed: float = 65.0
+    peak_volume: float = 0.0
 
     def get_travel_time(self, congestion_factor: float = 1.0) -> float:
         """Get travel time in seconds given congestion."""
@@ -38,11 +45,15 @@ class Corridor:
         """Compute congestion factor based on volume/capacity ratio."""
         total_capacity = self.capacity_vph * self.num_lanes
         vc_ratio = self.current_volume / max(1.0, total_capacity)
+        return 1.0 + self.bpr_alpha * (vc_ratio**self.bpr_beta)
 
-        # BPR function: t = t0 * (1 + alpha * (v/c)^beta)
-        alpha = 0.15
-        beta = 4.0
-        return 1.0 + alpha * (vc_ratio**beta)
+    def add_vehicle(self) -> None:
+        self.current_volume += 1
+        if self.current_volume > self.peak_volume:
+            self.peak_volume = self.current_volume
+
+    def remove_vehicle(self) -> None:
+        self.current_volume = max(0.0, self.current_volume - 1)
 
 
 @dataclass

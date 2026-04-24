@@ -110,6 +110,25 @@ def create_agents(config: dict[str, Any], n_agents: int, rng: np.random.Generato
     agents_config = config.get("agents", {})
     network_config = config.get("network", {})
 
+    # Optional: calibrate population parameters from Hytch warehouse.
+    # Agents created via create_commuter_population today sample from
+    # library defaults — calibration results are logged so experiments
+    # can pick them up once the helper is threaded through.
+    calibration_cfg = config.get("calibration", {})
+    if calibration_cfg.get("from_hytch", False):
+        from src.ml.calibration import load_and_calibrate
+
+        db_path = calibration_cfg.get("warehouse_path", "warehouse.duckdb")
+        try:
+            params = load_and_calibrate(db_path)
+            logger.info(
+                "Calibrated from Hytch: beta_incentive=%.3f beta_time=%.3f",
+                params.beta_incentive_mean,
+                params.beta_time_mean,
+            )
+        except Exception as e:
+            logger.warning("Calibration failed, using defaults: %s", e)
+
     # Get regions from config
     origin = network_config.get("origin_region", {})
     origin_center = origin.get("center", [36.08, -86.65])
@@ -169,6 +188,74 @@ def create_agents(config: dict[str, Any], n_agents: int, rng: np.random.Generato
     return agents
 
 
+def create_incentives(config: dict[str, Any]) -> list:
+    """Build incentive mechanisms from config."""
+    from src.incentives.base import IncentiveConfig, IncentiveType
+    from src.incentives.carpool import CarpoolIncentive
+    from src.incentives.pacer import PacerIncentive
+    from src.incentives.temporal import DepartureShiftIncentive
+
+    incentives_cfg = config.get("incentives", {})
+    built = []
+
+    if incentives_cfg.get("carpool", {}).get("enabled", False):
+        cp = incentives_cfg["carpool"]
+        built.append(
+            CarpoolIncentive(
+                config=IncentiveConfig(
+                    incentive_type=IncentiveType.CARPOOL,
+                    budget_daily=cp.get("budget_daily", 5000.0),
+                    corridor_ids=cp.get("corridor_ids", []),
+                ),
+                reward_per_passenger=cp.get("reward_per_passenger", 2.50),
+                max_reward=cp.get("max_reward", 10.00),
+            )
+        )
+
+    if incentives_cfg.get("pacer", {}).get("enabled", False):
+        pc = incentives_cfg["pacer"]
+        built.append(
+            PacerIncentive(
+                config=IncentiveConfig(
+                    incentive_type=IncentiveType.PACER,
+                    budget_daily=pc.get("budget_daily", 3000.0),
+                    corridor_ids=pc.get("corridor_ids", []),
+                ),
+                reward_per_mile=pc.get("reward_per_mile", 0.15),
+                smoothness_threshold=pc.get("smoothness_threshold", 0.7),
+                min_distance_miles=pc.get("min_distance_miles", 2.0),
+            )
+        )
+
+    if incentives_cfg.get("departure_shift", {}).get("enabled", False):
+        ds = incentives_cfg["departure_shift"]
+        inc = DepartureShiftIncentive(
+            config=IncentiveConfig(
+                incentive_type=IncentiveType.DEPARTURE_SHIFT,
+                budget_daily=ds.get("budget_daily", 2000.0),
+            ),
+            base_shift_reward=ds.get("base_reward", 3.00),
+        )
+        inc.setup_default_slots()
+        built.append(inc)
+
+    return built
+
+
+def create_allocator(config: dict[str, Any], n_agents: int):
+    """Build an Allocator from config."""
+    from src.optimization import AlwaysAllocator, GreedyAllocator, SecretaryAllocator
+
+    alloc_cfg = config.get("optimization", {})
+    strategy = alloc_cfg.get("strategy", "always")
+
+    if strategy == "greedy":
+        return GreedyAllocator(min_efficiency=alloc_cfg.get("min_efficiency", 0.5))
+    if strategy == "secretary":
+        return SecretaryAllocator(n_total=alloc_cfg.get("n_total", n_agents))
+    return AlwaysAllocator()
+
+
 def run_simulation(
     config: dict[str, Any],
     n_agents: int,
@@ -206,7 +293,15 @@ def run_simulation(
         random_seed=seed,
     )
 
-    engine = SimulationEngine(sim_config, network, rng)
+    incentives = create_incentives(config)
+    allocator = create_allocator(config, n_agents)
+    if incentives:
+        logger.info(f"  Incentives: {[i.incentive_type.name for i in incentives]}")
+        logger.info(f"  Allocator: {type(allocator).__name__}")
+
+    engine = SimulationEngine(
+        sim_config, network, rng, incentives=incentives, allocator=allocator
+    )
     engine.add_agents(agents)
 
     # Schedule departures
