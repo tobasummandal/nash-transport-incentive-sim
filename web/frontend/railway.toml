@@ -1,6 +1,7 @@
 [build]
 builder = "nixpacks"
 buildCommand = "npm install && npm run build"
+nixpacksConfigPath = "web/frontend/nixpacks.toml"
 
 [deploy]
 startCommand = "npm start -- -p ${PORT:-3000}"
