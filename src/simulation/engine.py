@@ -264,24 +264,36 @@ class SimulationEngine:
             "incentive": 0.0,
         }
 
-        # Offer incentives at departure (may flag trip as passenger-mode)
+        # Offer incentives at departure (may flag trip as passenger-mode
+        # or pacer-mode, affecting corridor dynamics).
         self._offer_incentives(agent_id, self.active_trips[agent_id])
+
+        # Re-read mode — incentive acceptance may have changed it.
+        mode = self.active_trips[agent_id]["mode"]
 
         # Record departure
         self.metrics.record_departure(agent_id, mode, corridor_id)
 
         # Update corridor volume — a successful carpool offer turns this
         # trip into a shared ride, so no additional vehicle enters the
-        # corridor. This is the hook by which incentives reduce congestion.
+        # corridor. Pacers still add a vehicle but also register as
+        # active pacers (smoothing congestion for surrounding traffic).
         displaces_vehicle = self.active_trips[agent_id].get(
             "displaces_vehicle", False
         )
-        if (
-            corridor_id
-            and corridor_id in self.network.corridors
-            and not displaces_vehicle
-        ):
-            self.network.corridors[corridor_id].add_vehicle()
+        if corridor_id and corridor_id in self.network.corridors:
+            if not displaces_vehicle:
+                self.network.corridors[corridor_id].add_vehicle()
+            if mode == "pacer":
+                self.network.corridors[corridor_id].add_pacer()
+
+        # Recompute travel time now that corridor state reflects this
+        # departure (and any pacer smoothing).
+        travel_time = self.network.get_travel_time(
+            origin, destination, mode, corridor_id
+        )
+        travel_time *= self.rng.uniform(0.9, 1.1)
+        self.active_trips[agent_id]["expected_travel_time"] = travel_time
 
         # Schedule arrival
         arrival_event = create_arrival_event(
@@ -327,14 +339,13 @@ class SimulationEngine:
         )
         self.metrics.record_trip(trip_record)
 
-        # Update corridor volume (mirror the departure-side displacement check)
+        # Update corridor volume (mirror the departure-side tracking)
         corridor_id = trip_info.get("corridor_id")
-        if (
-            corridor_id
-            and corridor_id in self.network.corridors
-            and not trip_info.get("displaces_vehicle", False)
-        ):
-            self.network.corridors[corridor_id].remove_vehicle()
+        if corridor_id and corridor_id in self.network.corridors:
+            if not trip_info.get("displaces_vehicle", False):
+                self.network.corridors[corridor_id].remove_vehicle()
+            if trip_info.get("mode") == "pacer":
+                self.network.corridors[corridor_id].remove_pacer()
 
     def _handle_mode_choice(self, event: Event) -> None:
         """Handle mode choice decision."""
@@ -544,10 +555,17 @@ class SimulationEngine:
                 (incentive, result.allocation)
             )
 
-            # Carpool acceptance removes this agent's vehicle from the
-            # network: they are a passenger, not a driver.
             if incentive.incentive_type.name == "CARPOOL":
                 trip_info["displaces_vehicle"] = True
+                trip_info["mode"] = "carpool_passenger"
+            elif incentive.incentive_type.name == "PACER":
+                trip_info["mode"] = "pacer"
+            elif incentive.incentive_type.name == "DEPARTURE_SHIFT":
+                shifted = context.get("shifted_departure_time")
+                if shifted and shifted != trip_info.get("departure_time"):
+                    trip_info["original_departure_time"] = trip_info["departure_time"]
+                    trip_info["departure_time"] = shifted
+                    trip_info["mode"] = "departure_shifted"
 
     def _complete_incentives(
         self, agent_id: str, trip_info: dict, arrival_time: float
@@ -583,14 +601,30 @@ class SimulationEngine:
         agent = self.agents.get(agent_id)
         carpool_eligible = True
         has_car = True
+        flexibility = 1800  # 30-min default
         if agent is not None and hasattr(agent, "profile"):
             carpool_eligible = getattr(agent.profile, "carpool_eligible", True)
             has_car = getattr(agent.profile, "has_car", True)
+            flexibility = getattr(agent.profile, "flexibility_minutes", 30) * 60
+
+        dep_time = trip_info.get("departure_time", 0.0)
+
+        # Propose a shifted departure time: move peak-period agents to
+        # the nearest shoulder slot (before 7 AM or after 9 AM).
+        shifted_time = dep_time
+        peak_start, peak_end = 7 * 3600, 9 * 3600
+        if peak_start <= dep_time < peak_end:
+            dist_to_early = dep_time - peak_start
+            dist_to_late = peak_end - dep_time
+            if dist_to_early <= dist_to_late:
+                shifted_time = peak_start - min(dist_to_early, flexibility)
+            else:
+                shifted_time = peak_end + min(dist_to_late, flexibility)
 
         return {
             "timestamp": self.current_time,
             "hour": hour,
-            "day_of_week": 0,  # weekday default — extend when calendar added
+            "day_of_week": 0,
             "corridor_id": trip_info.get("corridor_id"),
             "distance_miles": trip_info.get("distance", 0.0),
             "expected_distance_miles": trip_info.get("distance", 0.0),
@@ -600,26 +634,45 @@ class SimulationEngine:
             "carpool_eligible": carpool_eligible,
             "has_car": has_car,
             "enrolled_corridors": [trip_info.get("corridor_id")],
-            "original_departure_time": trip_info.get("departure_time", 0.0),
-            "shifted_departure_time": trip_info.get("departure_time", 0.0),
-            "flexibility_window": 900,
+            "original_departure_time": dep_time,
+            "shifted_departure_time": shifted_time,
+            "flexibility_window": flexibility,
         }
 
     def _build_completion_outcome(self, trip_info: dict, arrival_time: float) -> dict:
         """Build outcome dict for incentive completion verification."""
         hour = int((arrival_time / 3600) % 24)
         distance = trip_info.get("distance", 0.0)
+        mode = trip_info.get("mode", "drive")
+
+        is_driver = mode in ("drive", "drive_alone", "carpool", "pacer")
+        displaced = trip_info.get("displaces_vehicle", False)
+        actual_passengers = 2 if displaced else 1
+
+        # Pacer smoothness: compute from recorded speed samples if available,
+        # otherwise derive from corridor congestion state.
+        smoothness = 0.5
+        corridor_id = trip_info.get("corridor_id")
+        if mode == "pacer" and corridor_id and corridor_id in self.network.corridors:
+            cf = self.network.corridors[corridor_id].get_congestion_factor()
+            smoothness = max(0.0, min(1.0, 1.0 / cf))
+        elif displaced:
+            smoothness = 0.9
+
         return {
             "timestamp": arrival_time,
             "trip_completed": True,
-            "actual_passengers": 1,
-            "is_driver": True,
+            "actual_passengers": actual_passengers,
+            "is_driver": is_driver,
             "actual_distance_miles": distance,
             "distance_miles": distance,
             "completion_hour": hour,
             "hour": hour,
-            "smoothness_score": 0.85,
+            "smoothness_score": smoothness,
             "actual_departure_time": trip_info.get("departure_time", 0.0),
+            "original_departure_time": trip_info.get(
+                "original_departure_time", trip_info.get("departure_time", 0.0)
+            ),
         }
 
     def _score_offer(

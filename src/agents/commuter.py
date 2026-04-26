@@ -508,6 +508,7 @@ def create_commuter_population(
     work_region: tuple[tuple[float, float], tuple[float, float]],
     arrival_time_dist: tuple[float, float] = (8 * 3600, 1800),  # (mean, std)
     rng: Optional[np.random.Generator] = None,
+    population_params: Optional[Any] = None,
 ) -> list[CommuterAgent]:
     """
     Create a population of commuter agents with heterogeneous preferences.
@@ -518,6 +519,7 @@ def create_commuter_population(
         work_region: Bounding box for work locations
         arrival_time_dist: (mean, std) of desired arrival times
         rng: Random number generator
+        population_params: Calibrated PopulationParameters (uses defaults if None)
 
     Returns:
         List of CommuterAgent instances
@@ -527,11 +529,11 @@ def create_commuter_population(
     if rng is None:
         rng = np.random.default_rng()
 
-    pop_params = PopulationParameters(n_agents=n_agents)
+    pop_params = population_params or PopulationParameters(n_agents=n_agents)
+    pop_params.n_agents = n_agents
     agents = []
 
     for i in range(n_agents):
-        # Generate random home and work locations
         home = (
             rng.uniform(home_region[0][0], home_region[1][0]),
             rng.uniform(home_region[0][1], home_region[1][1]),
@@ -541,21 +543,18 @@ def create_commuter_population(
             rng.uniform(work_region[0][1], work_region[1][1]),
         )
 
-        # Generate arrival time
         arrival_time = rng.normal(arrival_time_dist[0], arrival_time_dist[1])
-        arrival_time = np.clip(arrival_time, 6 * 3600, 10 * 3600)  # 6 AM - 10 AM
+        arrival_time = np.clip(arrival_time, 6 * 3600, 10 * 3600)
 
-        # Generate preferences
         preferences = generate_heterogeneous_preferences(pop_params, rng)
 
-        # Create profile
         profile = CommuterProfile(
             home_location=home,
             work_location=work,
             desired_arrival_time=arrival_time,
-            has_car=rng.random() > 0.1,  # 90% have cars
-            has_transit_pass=rng.random() > 0.7,  # 30% have transit passes
-            carpool_eligible=rng.random() > 0.2,  # 80% eligible for carpool
+            has_car=rng.random() > 0.1,
+            has_transit_pass=rng.random() > 0.7,
+            carpool_eligible=rng.random() > 0.2,
         )
 
         agent = CommuterAgent(

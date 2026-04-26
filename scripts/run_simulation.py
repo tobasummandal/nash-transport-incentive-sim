@@ -110,21 +110,19 @@ def create_agents(config: dict[str, Any], n_agents: int, rng: np.random.Generato
     agents_config = config.get("agents", {})
     network_config = config.get("network", {})
 
-    # Optional: calibrate population parameters from Hytch warehouse.
-    # Agents created via create_commuter_population today sample from
-    # library defaults — calibration results are logged so experiments
-    # can pick them up once the helper is threaded through.
+    # Calibrate population parameters from Hytch warehouse when configured.
+    calibrated_params = None
     calibration_cfg = config.get("calibration", {})
     if calibration_cfg.get("from_hytch", False):
         from src.ml.calibration import load_and_calibrate
 
         db_path = calibration_cfg.get("warehouse_path", "warehouse.duckdb")
         try:
-            params = load_and_calibrate(db_path)
+            calibrated_params = load_and_calibrate(db_path)
             logger.info(
                 "Calibrated from Hytch: beta_incentive=%.3f beta_time=%.3f",
-                params.beta_incentive_mean,
-                params.beta_time_mean,
+                calibrated_params.beta_incentive_mean,
+                calibrated_params.beta_time_mean,
             )
         except Exception as e:
             logger.warning("Calibration failed, using defaults: %s", e)
@@ -182,6 +180,7 @@ def create_agents(config: dict[str, Any], n_agents: int, rng: np.random.Generato
             work_region=work_region,
             arrival_time_dist=(arrival_mean, arrival_std),
             rng=rng,
+            population_params=calibrated_params,
         )
         agents.extend(commuters)
 

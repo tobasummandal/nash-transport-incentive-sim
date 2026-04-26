@@ -34,26 +34,66 @@ class Corridor:
     current_volume: float = 0.0
     current_speed: float = 65.0
     peak_volume: float = 0.0
+    peak_congestion_factor: float = 1.0
+
+    # Pacer smoothing — calibrated from CIRCLES I-24 experiment
+    # (Jang et al. 2024, IEEE Control Systems; Ameli et al. 2025).
+    # At 4% penetration rate, 9.1% MPG improvement was observed.
+    # We model this as pacers reducing the congestion factor by a
+    # fraction proportional to penetration rate:
+    #   cf_reduction = pacer_alpha * (active_pacers / current_volume)
+    # With pacer_alpha = 2.25 (derived from 9%/4% = 2.25).
+    active_pacers: int = 0
+    pacer_alpha: float = 2.25
 
     def get_travel_time(self, congestion_factor: float = 1.0) -> float:
         """Get travel time in seconds given congestion."""
         effective_speed = self.free_flow_speed / max(1.0, congestion_factor)
-        effective_speed = max(5.0, effective_speed)  # Minimum 5 mph
+        effective_speed = max(5.0, effective_speed)
         return (self.length_miles / effective_speed) * 3600
 
+    def _instantaneous_capacity(self) -> float:
+        """Max vehicles simultaneously on the corridor at capacity flow."""
+        traversal_hours = self.length_miles / max(1.0, self.free_flow_speed)
+        return self.capacity_vph * self.num_lanes * traversal_hours
+
     def get_congestion_factor(self) -> float:
-        """Compute congestion factor based on volume/capacity ratio."""
-        total_capacity = self.capacity_vph * self.num_lanes
-        vc_ratio = self.current_volume / max(1.0, total_capacity)
-        return 1.0 + self.bpr_alpha * (vc_ratio**self.bpr_beta)
+        """Compute congestion factor with pacer smoothing.
+
+        Uses instantaneous capacity (max simultaneous vehicles) rather
+        than hourly flow so that the BPR function responds correctly to
+        the instantaneous vehicle count. Active pacers then reduce the
+        resulting congestion factor, modeling the wave-dampening effect
+        observed in the CIRCLES field experiment on I-24 (Nov 2022).
+        """
+        inst_cap = self._instantaneous_capacity()
+        vc_ratio = self.current_volume / max(1.0, inst_cap)
+        raw_cf = 1.0 + self.bpr_alpha * (vc_ratio ** self.bpr_beta)
+
+        if self.active_pacers > 0 and self.current_volume > 0:
+            penetration = self.active_pacers / self.current_volume
+            reduction = min(0.5, self.pacer_alpha * penetration)
+            excess = raw_cf - 1.0
+            raw_cf = 1.0 + excess * (1.0 - reduction)
+
+        return raw_cf
 
     def add_vehicle(self) -> None:
         self.current_volume += 1
         if self.current_volume > self.peak_volume:
             self.peak_volume = self.current_volume
+        cf = self.get_congestion_factor()
+        if cf > self.peak_congestion_factor:
+            self.peak_congestion_factor = cf
 
     def remove_vehicle(self) -> None:
         self.current_volume = max(0.0, self.current_volume - 1)
+
+    def add_pacer(self) -> None:
+        self.active_pacers += 1
+
+    def remove_pacer(self) -> None:
+        self.active_pacers = max(0, self.active_pacers - 1)
 
 
 @dataclass
@@ -132,11 +172,9 @@ class SimpleNetwork:
         """
         Estimate travel time between two points.
 
-        Args:
-            origin: (lat, lng) of origin
-            destination: (lat, lng) of destination
-            mode: travel mode
-            corridor_id: specific corridor to use (if applicable)
+        Uses link-level BPR travel times when the network has links,
+        corridor-level BPR for labeled corridor trips, and haversine
+        with area congestion as fallback.
 
         Returns:
             Travel time in seconds
@@ -144,41 +182,108 @@ class SimpleNetwork:
         distance = self._haversine_distance(origin, destination)
 
         if mode == "drive" or mode == "drive_alone":
-            # Check if using a corridor
             if corridor_id and corridor_id in self.corridors:
                 corridor = self.corridors[corridor_id]
                 congestion = corridor.get_congestion_factor()
                 return corridor.get_travel_time(congestion)
 
-            # Default driving: assume 30 mph average with congestion
+            # Try link-level routing when links exist
+            if self.links:
+                link_time = self._route_via_links(origin, destination)
+                if link_time is not None:
+                    return link_time
+
             base_speed = 30.0
             congestion = self._estimate_area_congestion()
             effective_speed = base_speed / congestion
-            return (distance / effective_speed) * 3600
+            return (distance / max(effective_speed, 5.0)) * 3600
 
         elif mode == "carpool":
-            # Carpool similar to drive but with pickup detour
             drive_time = self.get_travel_time(origin, destination, "drive", corridor_id)
-            detour_time = 300  # 5 minute average detour
+            detour_time = 300
             return drive_time + detour_time
 
+        elif mode == "pacer":
+            if corridor_id and corridor_id in self.corridors:
+                corridor = self.corridors[corridor_id]
+                congestion = corridor.get_congestion_factor()
+                return corridor.get_travel_time(congestion)
+            return self.get_travel_time(origin, destination, "drive", corridor_id)
+
         elif mode == "transit":
-            # Transit slower but less affected by congestion
             base_speed = 20.0
-            wait_time = 600  # 10 minute average wait
+            wait_time = 600
             return (distance / base_speed) * 3600 + wait_time
 
         elif mode == "walk":
-            walk_speed = 3.0  # mph
-            return (distance / walk_speed) * 3600
+            return (distance / 3.0) * 3600
 
         elif mode == "bike":
-            bike_speed = 12.0  # mph
-            return (distance / bike_speed) * 3600
+            return (distance / 12.0) * 3600
 
         else:
-            # Default
             return (distance / 25.0) * 3600
+
+    def _route_via_links(
+        self,
+        origin: tuple[float, float],
+        destination: tuple[float, float],
+    ) -> Optional[float]:
+        """
+        Greedy nearest-link routing with BPR travel times.
+
+        Finds the closest origin and destination nodes, then walks
+        the link graph greedily toward the destination. Each link
+        contributes its own flow-dependent BPR travel time.
+        """
+        if not self.nodes or not self.links:
+            return None
+
+        origin_node = self._nearest_node(origin)
+        dest_node = self._nearest_node(destination)
+        if origin_node is None or dest_node is None or origin_node == dest_node:
+            return None
+
+        adjacency: dict[str, list[NetworkLink]] = {}
+        for link in self.links.values():
+            adjacency.setdefault(link.from_node, []).append(link)
+
+        visited: set[str] = set()
+        current = origin_node
+        total_time = 0.0
+
+        for _ in range(len(self.nodes)):
+            if current == dest_node:
+                return total_time
+            if current in visited:
+                break
+            visited.add(current)
+
+            outgoing = adjacency.get(current, [])
+            if not outgoing:
+                break
+
+            dest_loc = self.nodes[dest_node].location
+            best_link = min(
+                outgoing,
+                key=lambda lk: self._haversine_distance(
+                    self.nodes[lk.to_node].location, dest_loc
+                ),
+            )
+            total_time += best_link.get_travel_time()
+            current = best_link.to_node
+
+        return None
+
+    def _nearest_node(self, point: tuple[float, float]) -> Optional[str]:
+        if not self.nodes:
+            return None
+        return min(
+            self.nodes,
+            key=lambda nid: self._haversine_distance(
+                self.nodes[nid].location, point
+            ),
+        )
 
     def update_volumes(self, departures: dict[str, int]) -> None:
         """
@@ -234,14 +339,17 @@ def create_i24_network() -> SimpleNetwork:
     """
     network = SimpleNetwork()
 
-    # Add I-24 corridor (inbound and outbound)
+    # The I-24 MOTION testbed covers a 4-mile congestion-prone section
+    # of I-24 (SR-254 to SR-171). Capacity is set to represent a
+    # bottleneck segment (merge/weave area) so that the simulation
+    # produces realistic congestion at typical agent counts (100-500).
     network.add_corridor(
         Corridor(
             corridor_id="I-24-inbound",
-            name="I-24 Inbound",
-            length_miles=15.0,
+            name="I-24 Inbound (MOTION testbed)",
+            length_miles=4.0,
             free_flow_speed=65.0,
-            capacity_vph=2000.0,
+            capacity_vph=120.0,
             num_lanes=3,
             direction="inbound",
         )
@@ -249,10 +357,10 @@ def create_i24_network() -> SimpleNetwork:
     network.add_corridor(
         Corridor(
             corridor_id="I-24-outbound",
-            name="I-24 Outbound",
-            length_miles=15.0,
+            name="I-24 Outbound (MOTION testbed)",
+            length_miles=4.0,
             free_flow_speed=65.0,
-            capacity_vph=2000.0,
+            capacity_vph=120.0,
             num_lanes=3,
             direction="outbound",
         )

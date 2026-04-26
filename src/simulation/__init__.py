@@ -21,6 +21,13 @@ from .network import (
     create_i24_network,
     create_stadium_network,
 )
+from .equilibrium import (
+    EquilibriumResult,
+    best_response_dynamics,
+    compute_wardrop_gap,
+    rosenthal_potential,
+    verify_potential_monotonicity,
+)
 
 __all__ = [
     # Engine
@@ -44,4 +51,10 @@ __all__ = [
     "NetworkLink",
     "create_i24_network",
     "create_stadium_network",
+    # Equilibrium
+    "EquilibriumResult",
+    "best_response_dynamics",
+    "compute_wardrop_gap",
+    "rosenthal_potential",
+    "verify_potential_monotonicity",
 ]

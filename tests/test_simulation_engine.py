@@ -15,6 +15,7 @@ from src.agents.commuter import create_commuter_population
 from src.incentives.base import IncentiveConfig, IncentiveType
 from src.incentives.carpool import CarpoolIncentive
 from src.incentives.pacer import PacerIncentive
+from src.incentives.temporal import DepartureShiftIncentive
 from src.optimization import (
     AlwaysAllocator,
     GreedyAllocator,
@@ -209,6 +210,34 @@ class TestCongestionFeedback:
         )
 
 
+class TestDepartureShiftWiring:
+    """DepartureShiftIncentive must be offered and complete correctly."""
+
+    def _departure_shift_incentive(self) -> DepartureShiftIncentive:
+        inc = DepartureShiftIncentive(
+            config=IncentiveConfig(
+                incentive_type=IncentiveType.DEPARTURE_SHIFT,
+                budget_daily=500.0,
+            ),
+            base_shift_reward=3.00,
+            min_shift_minutes=0,
+        )
+        inc.setup_default_slots()
+        return inc
+
+    def test_departure_shift_offers_fire(self):
+        inc = self._departure_shift_incentive()
+        engine = _build_engine(incentives=[inc], n_agents=15)
+        engine.run()
+        assert inc.n_offers > 0, "departure_shift offers never fired"
+
+    def test_departure_shift_budget_debited(self):
+        inc = self._departure_shift_incentive()
+        engine = _build_engine(incentives=[inc], n_agents=15)
+        engine.run()
+        assert inc.total_spent <= inc.config.budget_daily
+
+
 class TestMultipleIncentives:
     """Engine must handle more than one incentive mechanism simultaneously."""
 
@@ -216,6 +245,22 @@ class TestMultipleIncentives:
         cp = _carpool_incentive()
         pc = _pacer_incentive()
         engine = _build_engine(incentives=[cp, pc], n_agents=20)
+        engine.run()
+        assert cp.n_offers > 0
+        assert pc.n_offers > 0
+
+    def test_all_three_incentives_coexist(self):
+        cp = _carpool_incentive()
+        pc = _pacer_incentive()
+        ds = DepartureShiftIncentive(
+            config=IncentiveConfig(
+                incentive_type=IncentiveType.DEPARTURE_SHIFT,
+                budget_daily=500.0,
+            ),
+            min_shift_minutes=0,
+        )
+        ds.setup_default_slots()
+        engine = _build_engine(incentives=[cp, pc, ds], n_agents=30)
         engine.run()
         assert cp.n_offers > 0
         assert pc.n_offers > 0

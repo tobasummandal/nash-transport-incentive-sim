@@ -10,66 +10,9 @@ This project builds algorithms for incentive-based congestion mitigation, treati
 
 - **Simulation Algorithm Design**: Event-driven simulation with spatial indexing for large-scale corridor simulations (10,000+ agents)
 - **Incentive Optimization**: Approximation algorithms for optimal reward allocation under budget constraints
-<<<<<<< HEAD
-- **Behavioral Model Learning**: ML techniques to extract response functions from a growing dataset of 369,831+ historical rideshare trips
-=======
 - **Behavioral Model Learning**: ML techniques to extract response functions from 369,831 historical rideshare trips
 - **Equilibrium Computation**: Algorithms for computing Nash/Stackelberg equilibria in incentive-mediated systems
 - **Demographic Integration**: Agent profiles enriched with ZCTA-level demographics (income, poverty) from population-dyna platform for realistic behavioral heterogeneity
-
-### Demographic-Aware Agent Modeling
-
-Agents are enriched with ZCTA-level demographics from the **[population-dyna](https://github.com/LNshuti/population-dyna)** platform, enabling income-stratified analysis and realistic behavioral heterogeneity.
-
-**Data Coverage:**
-- **376 Tennessee ZCTAs** (Nashville and surrounding areas)
-- Income range: $14k-$70k (avg $62k)
-- Poverty rates: 0-100% (avg 14%)
-- Even distribution across 5 income quintiles
-
-**Behavioral Calibration:**
-
-Demographics influence agent preferences through empirically-grounded relationships:
-
-| Demographic | Impact | Formula/Relationship |
-|-------------|--------|---------------------|
-| **Household Income** | Value of Time (VOT) | 50% of hourly wage (DOT guidance) |
-| **Income Quintile** | Incentive Sensitivity | Q1 (low) → 2.66x more responsive than Q5 (high) |
-| **Income Quintile** | Cost Sensitivity | Q1 → 1.5x baseline, Q5 → 0.5x baseline |
-| **Income** | Car Ownership | Logistic function: P(car) = 1/(1+exp(-(income-40k)/10k)) |
-
-**Key Results:**
-- **VOT Variation:** $13/hr (low income) → $16/hr (high income)
-- **Incentive Response:** 2.66x higher for low-income agents
-- **Spatial Heterogeneity:** Agents distributed across 376 ZCTAs with realistic income patterns
-
-**Usage Example:**
-
-```python
-from src.agents.commuter import create_demographic_commuter_population
-
-# Create agents with Nashville demographics
-agents = create_demographic_commuter_population(
-    n_agents=1000,
-    home_region=((36.0, -87.0), (36.4, -86.5)),  # Nashville bbox
-    work_region=((36.1, -86.9), (36.3, -86.6)),
-    warehouse_path="warehouse.duckdb",
-)
-
-# Each agent has:
-# - profile.home_zcta (e.g., "37203")
-# - profile.household_income ($14k-$70k)
-# - profile.income_quintile (1-5)
-# - preferences.vot (calibrated to income)
-# - preferences.beta_incentive (income-dependent)
-```
-
-**Research Questions Enabled:**
-- "Do low-income neighborhoods benefit more from carpool incentives?"
-- "Which ZCTAs have highest pacer participation potential?"
-- "Are current incentives equitable across income groups?"
-- "How does income affect mode choice and schedule flexibility?"
->>>>>>> f08c9f0 (add demog)
 
 ### Incentive Use Cases
 
@@ -84,6 +27,12 @@ agents = create_demographic_commuter_population(
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
+│               Next.js Frontend (web/frontend/)                  │
+│  Dual corridor viz · side-by-side compare · playback controls   │
+├─────────────────────────────────────────────────────────────────┤
+│               FastAPI Simulation API (web/sim_api.py)           │
+│  POST /api/simulate   POST /api/compare   GET /api/health       │
+├─────────────────────────────────────────────────────────────────┤
 │                    Simulation Controller                        │
 ├─────────────────────────────────────────────────────────────────┤
 │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐   │
@@ -145,14 +94,25 @@ ihute/
 │       ├── config.py        # Configuration management
 │       ├── logging.py       # Structured logging
 │       └── visualization.py # Plotting and dashboards
-├── tests/                   # Unit and integration tests
+├── web/
+│   ├── sim_api.py           # FastAPI server (POST /api/simulate, /api/compare)
+│   ├── requirements.txt     # API dependencies (fastapi, uvicorn, numpy)
+│   └── frontend/            # Next.js 15 interactive dashboard
+│       ├── app/             # App Router pages and layout
+│       ├── components/
+│       │   ├── Controls.tsx     # Simulation parameter sidebar
+│       │   ├── CorridorViz.tsx  # Animated I-24 corridor visualization
+│       │   └── StatsBar.tsx     # Baseline vs incentivized metrics bar
+│       └── vercel.json      # Vercel deployment config
+├── tests/                   # Unit and integration tests (229 tests)
 ├── notebooks/               # Jupyter notebooks for analysis
 ├── configs/                 # YAML configuration files
 ├── data/                    # Data directory (gitignored)
 │   ├── raw/                 # Raw input data
 │   ├── processed/           # Processed datasets
 │   └── models/              # Trained ML models
-├── docs/                    # Documentation
+├── app/                     # Gradio dashboard
+├── dbt/                     # dbt Core + DuckDB data pipeline
 ├── scripts/                 # CLI scripts
 ├── pyproject.toml           # Project configuration
 └── README.md
@@ -164,8 +124,8 @@ ihute/
 
 ```bash
 # Clone the repository
-git clone https://github.com/LNshuti/ihute.git
-cd ihute
+git clone https://github.com/tobasummandal/nash-transport-incentive-sim
+cd nash-transport-incentive-sim
 
 # Create virtual environment
 python -m venv venv
@@ -326,8 +286,6 @@ python -m scripts.run_experiments --experiment carpool_elasticity \
     --targeting-precision low medium high
 ```
 
-<<<<<<< HEAD
-=======
 ### Experiment 3: Event Egress Optimization
 
 **Question**: Are small delays across many participants more effective than large delays for few?
@@ -339,7 +297,58 @@ python -m scripts.run_experiments --experiment event_egress \
 ```
 
 
->>>>>>> f08c9f0 (add demog)
+## Web Dashboard
+
+The web stack provides a real-time interactive frontend for running and comparing simulations.
+
+### Running Locally
+
+**Backend API** (`web/sim_api.py` — FastAPI + uvicorn):
+
+```bash
+cd web
+pip install -r requirements.txt
+uvicorn sim_api:app --reload --port 8000
+```
+
+Endpoints:
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/health` | Health check |
+| `POST` | `/api/simulate` | Single run with chosen incentives |
+| `POST` | `/api/compare` | Baseline vs incentivized (same agents/departures) |
+
+**Frontend** (`web/frontend/` — Next.js 15):
+
+```bash
+cd web/frontend
+npm install
+NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000). The UI shows a side-by-side animated comparison of the I-24 corridor with and without incentives, a stats bar with delta metrics, and a unified playback scrubber.
+
+### Simulation Parameters (API)
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `n_agents` | 200 | Number of commuters (10–5000) |
+| `duration_hours` | 3.0 | Simulation window (0.5–8 h) |
+| `carpool_enabled` | true | Enable carpool incentive |
+| `carpool_reward_per_passenger` | $2.50 | Per-passenger reward |
+| `pacer_enabled` | true | Enable pacer incentive |
+| `pacer_reward_per_mile` | $0.15 | Per-mile pacing reward |
+| `departure_shift_enabled` | false | Enable departure shift incentive |
+| `allocator` | `always` | Allocation strategy: `always`, `greedy`, `secretary` |
+
+### Gradio Dashboard
+
+```bash
+cd app && python app.py
+```
+
+**Live Demo:** https://huggingface.co/spaces/LeonceNsh/ihute
+
 ## Development
 
 ### Building Documentation
@@ -348,17 +357,4 @@ python -m scripts.run_experiments --experiment event_egress \
 cd docs/
 make html
 ```
-
-### Gradio Dashboard Deployment
-
-**Local Development:**
-```bash
-# Run locally
-cd app && python app.py
-
-# Run with auto-reload for development
-cd app && gradio app.py
-```
-
-**Live Demo:** https://huggingface.co/spaces/LeonceNsh/ihute
 
