@@ -1,360 +1,163 @@
-# Nashville Transportation Incentive Simulation
+# Nashville I-24 Corridor — Incentive Simulation
 
-An agent-based simulation framework for evaluating incentive mechanisms to reduce urban congestion. 
-
-##  About
-
-This project builds algorithms for incentive-based congestion mitigation, treating traffic participants as strategic **agents whose behavior can be influenced through carefully designed reward mechanisms**.
-
-### Features
-
-- **Simulation Algorithm Design**: Event-driven simulation with spatial indexing for large-scale corridor simulations (10,000+ agents)
-- **Incentive Optimization**: Approximation algorithms for optimal reward allocation under budget constraints
-- **Behavioral Model Learning**: ML techniques to extract response functions from 369,831 historical rideshare trips
-- **Equilibrium Computation**: Algorithms for computing Nash/Stackelberg equilibria in incentive-mediated systems
-- **Demographic Integration**: Agent profiles enriched with ZCTA-level demographics (income, poverty) from population-dyna platform for realistic behavioral heterogeneity
-
-### Incentive Use Cases
-
-| Use Case | Objective | Key Mechanism |
-|----------|-----------|---------------|
-| **Pacer Driving** | Reduce stop-and-go waves | Rewards for smooth speed profiles |
-| **Carpooling** | Increase vehicle occupancy | Time/corridor-specific shared ride incentives |
-| **Event Egress** | Flatten post-Titans game peaks | Departure delay & mode-shift rewards |
-| **Transit Promotion** | Encourage mode shift | Geofenced peak-period transit incentives |
+Agent-based simulation for evaluating incentive mechanisms (carpooling, pacer driving, departure shifting) to reduce congestion on Nashville's I-24 corridor.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │               Next.js Frontend (web/frontend/)                  │
-│  Dual corridor viz · side-by-side compare · playback controls   │
+│  Dual corridor viz · synchronized playback · stats comparison   │
 ├─────────────────────────────────────────────────────────────────┤
 │               FastAPI Simulation API (web/sim_api.py)           │
-│  POST /api/simulate   POST /api/compare   GET /api/health       │
+│  POST /api/simulate   POST /api/compare   GET /api/health      │
 ├─────────────────────────────────────────────────────────────────┤
-│                    Simulation Controller                        │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
+│  │   Agents     │  │  Incentive   │  │  I-24 MOTION Network │  │
+│  │  (Commuter,  │◄─┤  Mechanisms  │◄─┤  (BPR congestion,    │  │
+│  │   Pacer)     │  │              │  │   pacer smoothing)   │  │
+│  └──────┬───────┘  └──────────────┘  └──────────────────────┘  │
+│         ▼                                                      │
+│  ┌──────────────────────────────────────────────────────────┐  │
+│  │              Event-Driven Simulation Engine              │  │
+│  │  Priority queue · BPR travel times · budget allocators   │  │
+│  └──────────────────────────────────────────────────────────┘  │
 ├─────────────────────────────────────────────────────────────────┤
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐   │
-│  │   Agents     │  │  Incentive   │  │    Road Network      │   │
-│  │  (Strategic) │◄─┤   Engine     │◄─┤  (Spatial Index)     │   │
-│  └──────┬───────┘  └──────────────┘  └──────────────────────┘   │
-│         │                                                       │
-│         ▼                                                       │
-│  ┌──────────────────────────────────────────────────────────┐   │
-│  │              Event-Driven Simulation Engine              │   │
-│  │  • Priority Queue Scheduling                             │   │
-│  │  • Spatial Hashing for Proximity Queries                 │   │
-│  │  • Incremental State Updates                             │   │
-│  └──────────────────────────────────────────────────────────┘   │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐   │
-│  │ Optimization │  │     ML       │  │    Analytics &       │   │
-│  │  Algorithms  │  │  Calibration │  │    Validation        │   │
-│  └──────────────┘  └──────────────┘  └──────────────────────┘   │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
+│  │ Optimization │  │     ML       │  │   dbt + DuckDB       │  │
+│  │  Allocators  │  │  Calibration │  │   Data Pipeline      │  │
+│  └──────────────┘  └──────────────┘  └──────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+## Incentive Mechanisms
+
+| Mechanism | How it works | Effect |
+|-----------|-------------|--------|
+| **Carpooling** | Reward per passenger ($2.50 default) | Removes vehicles from corridor |
+| **Pacer driving** | Reward per mile ($0.15) for smooth driving | Dampens stop-and-go waves (CIRCLES-calibrated) |
+| **Departure shift** | Reward for moving peak departure to shoulder period | Spreads demand across time |
+
+The pacer congestion model is calibrated from the [CIRCLES Consortium](https://circles-consortium.github.io/) I-24 field experiment (Nov 2022), where 100 AI-equipped vehicles achieved 9.1% fuel efficiency improvement at 4% penetration rate.
 
 ## Project Structure
 
 ```
-ihute/
 ├── src/
-│   ├── agents/              # Agent models and behavior
-│   │   ├── base.py          # Base agent class
-│   │   ├── commuter.py      # Commuter agent with mode/route choice
-│   │   ├── pacer.py         # Flow-stabilizing pacer driver
-│   │   └── behavioral.py    # Behavioral response functions
-│   ├── incentives/          # Incentive mechanism implementations
-│   │   ├── base.py          # Base incentive class
-│   │   ├── carpool.py       # Carpooling incentives
-│   │   ├── pacer.py         # Pacer driving rewards
-│   │   ├── temporal.py      # Departure time shift incentives
-│   │   └── transit.py       # Transit promotion incentives
-│   ├── simulation/          # Core simulation engine
-│   │   ├── engine.py        # Event-driven simulation controller
-│   │   ├── events.py        # Event types and scheduling
-│   │   ├── network.py       # Road network with spatial indexing
-│   │   └── metrics.py       # Performance measurement
-│   ├── optimization/        # Incentive optimization algorithms
-│   │   ├── greedy.py        # Greedy allocation with approximation bounds
-│   │   ├── dynamic.py       # Dynamic programming approaches
-│   │   ├── metaheuristic.py # GA/simulated annealing
-│   │   └── online.py        # Online allocation algorithms
-│   ├── ml/                  # Machine learning for calibration
-│   │   ├── features.py      # Feature engineering from GPS data
-│   │   ├── models.py        # Classification/regression models
-│   │   └── validation.py    # Cross-validation and testing
-│   ├── data/                # Data loading and processing
-│   │   ├── hytch.py         # Hytch rideshare data loader
-│   │   ├── demographics.py  # ZCTA demographics loader (population-dyna)
-│   │   ├── network.py       # Road network data (OSM)
-│   │   └── events.py        # Event schedules (Titans games)
-│   └── utils/               # Utilities
-│       ├── config.py        # Configuration management
-│       ├── logging.py       # Structured logging
-│       └── visualization.py # Plotting and dashboards
+│   ├── agents/           # Agent models
+│   │   ├── base.py       # TravelMode, AgentPreferences, LinearUtilityModel
+│   │   ├── commuter.py   # CommuterAgent, population generation
+│   │   ├── pacer.py      # PacerAgent, pacing sessions
+│   │   └── behavioral.py # Logit, mixed logit, prospect theory, regret models
+│   ├── incentives/       # Incentive mechanisms
+│   │   ├── base.py       # BaseIncentive, IncentiveConfig, offer/accept/complete
+│   │   ├── carpool.py    # CarpoolIncentive, spatial matching
+│   │   ├── pacer.py      # PacerIncentive, smoothness verification
+│   │   └── temporal.py   # DepartureShiftIncentive, time slot management
+│   ├── simulation/       # Core engine
+│   │   ├── engine.py     # SimulationEngine (event loop, incentive wiring)
+│   │   ├── network.py    # Corridor with BPR congestion + pacer smoothing
+│   │   ├── events.py     # Event types and scheduling
+│   │   ├── metrics.py    # TripRecord, MetricsCollector
+│   │   └── equilibrium.py
+│   ├── optimization/     # Budget allocators
+│   │   ├── allocator.py  # Always, Greedy, Secretary allocators
+│   │   └── complexity.py # Approximation analysis
+│   └── ml/
+│       └── calibration.py # Hytch behavioral calibration (optional)
 ├── web/
-│   ├── sim_api.py           # FastAPI server (POST /api/simulate, /api/compare)
-│   ├── requirements.txt     # API dependencies (fastapi, uvicorn, numpy)
-│   └── frontend/            # Next.js 15 interactive dashboard
-│       ├── app/             # App Router pages and layout
-│       ├── components/
-│       │   ├── Controls.tsx     # Simulation parameter sidebar
-│       │   ├── CorridorViz.tsx  # Animated I-24 corridor visualization
-│       │   └── StatsBar.tsx     # Baseline vs incentivized metrics bar
-│       └── vercel.json      # Vercel deployment config
-├── tests/                   # Unit and integration tests (229 tests)
-├── notebooks/               # Jupyter notebooks for analysis
-├── configs/                 # YAML configuration files
-├── data/                    # Data directory (gitignored)
-│   ├── raw/                 # Raw input data
-│   ├── processed/           # Processed datasets
-│   └── models/              # Trained ML models
-├── app/                     # Gradio dashboard
-├── dbt/                     # dbt Core + DuckDB data pipeline
-├── scripts/                 # CLI scripts
-├── pyproject.toml           # Project configuration
-└── README.md
+│   ├── sim_api.py        # FastAPI backend
+│   ├── requirements.txt
+│   └── frontend/         # Next.js dashboard
+│       ├── app/          # Layout, page, globals.css
+│       └── components/   # Controls, CorridorViz, StatsBar
+├── tests/                # 10 test modules
+├── dbt/                  # dbt Core + DuckDB pipeline
+├── scripts/              # CLI tools (run_simulation, experiments, etc.)
+├── configs/              # YAML simulation configs
+├── report/               # LaTeX paper + figures
+└── hytch data info/      # Hytch data documentation
 ```
 
 ## Quick Start
 
-### Installation
+### Backend API
 
 ```bash
-# Clone the repository
-git clone https://github.com/tobasummandal/nash-transport-incentive-sim
-cd nash-transport-incentive-sim
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
-pip install -e ".[dev]"
-```
-
-### Command Line Interface
-
-```bash
-# Run pacer simulation on I-24
-python -m scripts.run_simulation --config configs/pacer_i24.yaml --agents 100000
-
-# Train behavioral model from Hytch data
-python -m scripts.train_model --data data/raw/hytch_trips.parquet --output data/models/
-
-# Optimize incentive allocation
-python -m scripts.optimize --scenario titans_game --budget 500000 --algorithm greedy
-
-# Run full experiment suite
-python -m scripts.run_experiments --suite all --output results/
-```
-
-## Data Sources
-
-### Hytch Rideshare Data (Primary)
-
-| Metric | Value |
-|--------|-------|
-| Total trips | 369,831 |
-| Date range | 2018-2024 |
-| Avg participants/trip | 2.5 |
-| Training set | 352,354 trips (2018-2019) |
-| Test set | 17,477 trips (2022-2024) |
-
-Features extracted:
-- Trip distance, duration, time-of-day
-- Origin/destination zones
-- Carpool formation rates
-- Incentive response elasticity
-
-### Nashville Road Network
-
-- OpenStreetMap extract for Davidson County
-- Focus corridors: I-24, I-40, I-65
-- Spatial indexing with R-tree for proximity queries
-
-### Event Data
-
-- Titans game schedules (Nissan Stadium)
-- Concert and event calendar
-- Historical traffic patterns from TDOT
-
-### Demographics Data (population-dyna)
-
-**Source:** [population-dyna platform](https://github.com/LNshuti/population-dyna)
-
-| Metric | Value |
-|--------|-------|
-| Total ZCTAs | 376 (Tennessee) |
-| Coverage | Nashville + surrounding areas |
-| Income Range | $14k - $70k |
-| Avg Poverty Rate | 14.1% |
-| Data Vintage | 2020-2022 |
-
-**Datasets Used:**
-- `zcta_poverty.parquet` - ZCTA-level poverty rates (2011-2022)
-- `county_unemployment.parquet` - County unemployment time series (1990-2024)
-- Derived: Median household income estimates from poverty rates
-
-**Integration:**
-- Loaded into DuckDB via dbt pipeline
-- 376 ZCTAs with income quintiles, poverty rates
-- Used to calibrate agent VOT and behavioral parameters
-- Enables income-stratified simulation analysis
-
-## Methodology
-
-### Agent Behavioral Models
-
-Agents make decisions using bounded-rational utility maximization:
-
-```
-U(action) = β₀ + β₁·travel_time + β₂·cost + β₃·incentive + β₄·comfort + ε
-```
-
-Decision rules:
-- **Softmax**: P(action) ∝ exp(U(action)/τ)
-- **Epsilon-greedy**: Explore with probability ε
-- **Best response**: Pure utility maximization
-
-### Incentive Optimization
-
-Budget-constrained allocation problem:
-
-```
-maximize    Σᵢ congestion_reduction(incentiveᵢ)
-subject to  Σᵢ costᵢ ≤ B (budget)
-            incentiveᵢ ≥ 0
-```
-
-Algorithms implemented:
-| Algorithm | Approximation Ratio | Time Complexity |
-|-----------|---------------------|-----------------|
-| Greedy | 1 - 1/e ≈ 0.63 | O(n log n) |
-| Dynamic Programming | Optimal (pseudo-poly) | O(nB) |
-| Genetic Algorithm | Empirical | O(g·p·n) |
-| Online (Secretary) | 1/e ≈ 0.37 | O(n) |
-
-### Equilibrium Computation
-
-For multi-agent strategic interactions:
-- **Best Response Dynamics**: Iterate until convergence
-- **Fictitious Play**: Learn from historical play
-- **Potential Games**: Exploit structure for faster convergence
-
-## Evaluation Metrics
-
-### Computational Metrics
-- Runtime complexity (wall-clock, big-O)
-- Memory footprint and scalability
-- Convergence rate to equilibrium
-- Approximation quality
-
-### Transportation Metrics
-- Peak demand reduction (%)
-- Travel time reliability (95th percentile)
-- Vehicle-miles traveled (VMT) reduction
-- Average vehicle occupancy
-- Incentive efficiency ($/VMT reduced)
-
-### Validation Metrics
-- Prediction accuracy (AUC, RMSE)
-- Behavioral model fit (χ², KS test)
-- Simulation-to-reality gap
-
-## Experiments
-
-### Experiment 1: Pacer Participation Threshold
-
-**Question**: What minimum pacer participation rate yields measurable congestion reduction?
-
-```bash
-python -m scripts.run_experiments --experiment pacer_threshold \
-    --participation-rates 0.01 0.02 0.05 0.10 0.15 0.20 \
-    --replications 3000
-```
-
-### Experiment 2: Carpool Incentive Elasticity
-
-**Question**: Is it more effective to increase reward magnitude or targeting precision?
-
-```bash
-python -m scripts.run_experiments --experiment carpool_elasticity \
-    --reward-levels 1.0 2.0 5.0 10.0 \
-    --targeting-precision low medium high
-```
-
-### Experiment 3: Event Egress Optimization
-
-**Question**: Are small delays across many participants more effective than large delays for few?
-
-```bash
-python -m scripts.run_experiments --experiment event_egress \
-    --delay-distribution uniform concentrated \
-    --total-delay-budget 100000
-```
-
-
-## Web Dashboard
-
-The web stack provides a real-time interactive frontend for running and comparing simulations.
-
-### Running Locally
-
-**Backend API** (`web/sim_api.py` — FastAPI + uvicorn):
-
-```bash
-cd web
 pip install -r requirements.txt
-uvicorn sim_api:app --reload --port 8000
+cd web && pip install -r requirements.txt
+uvicorn web.sim_api:app --port 8000
 ```
 
-Endpoints:
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/health` | Health check |
-| `POST` | `/api/simulate` | Single run with chosen incentives |
-| `POST` | `/api/compare` | Baseline vs incentivized (same agents/departures) |
-
-**Frontend** (`web/frontend/` — Next.js 15):
+### Frontend
 
 ```bash
 cd web/frontend
 npm install
-NEXT_PUBLIC_API_URL=http://localhost:8000 npm run dev
+npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000). The UI shows a side-by-side animated comparison of the I-24 corridor with and without incentives, a stats bar with delta metrics, and a unified playback scrubber.
+Open [localhost:3000](http://localhost:3000) — configure parameters in the sidebar, hit Run, and watch both corridors animate side-by-side.
 
-### Simulation Parameters (API)
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `n_agents` | 200 | Number of commuters (10–5000) |
-| `duration_hours` | 3.0 | Simulation window (0.5–8 h) |
-| `carpool_enabled` | true | Enable carpool incentive |
-| `carpool_reward_per_passenger` | $2.50 | Per-passenger reward |
-| `pacer_enabled` | true | Enable pacer incentive |
-| `pacer_reward_per_mile` | $0.15 | Per-mile pacing reward |
-| `departure_shift_enabled` | false | Enable departure shift incentive |
-| `allocator` | `always` | Allocation strategy: `always`, `greedy`, `secretary` |
-
-### Gradio Dashboard
+### CLI Simulation
 
 ```bash
-cd app && python app.py
+python -m scripts.run_simulation --config configs/pacer_i24.yaml
 ```
 
-**Live Demo:** https://huggingface.co/spaces/LeonceNsh/ihute
-
-## Development
-
-### Building Documentation
+### Tests
 
 ```bash
-cd docs/
-make html
+pytest tests/ -v
 ```
 
+## API
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/health` | Health check |
+| `POST` | `/api/simulate` | Single simulation run |
+| `POST` | `/api/compare` | Baseline vs incentivized comparison (same seed) |
+
+### Parameters
+
+| Parameter | Default | Range |
+|-----------|---------|-------|
+| `n_agents` | 200 | 10–5,000 |
+| `duration_hours` | 3.0 | 0.5–8 |
+| `carpool_enabled` | true | |
+| `carpool_reward_per_passenger` | $2.50 | |
+| `pacer_enabled` | true | |
+| `pacer_reward_per_mile` | $0.15 | |
+| `departure_shift_enabled` | false | |
+| `departure_shift_budget` | $2,000 | |
+| `allocator` | `always` | `always`, `greedy`, `secretary` |
+
+## Congestion Model
+
+The corridor uses a BPR (Bureau of Public Roads) volume-delay function with instantaneous capacity:
+
+```
+congestion_factor = 1 + α × (V/C)^β
+```
+
+where V is current vehicle count, C is instantaneous capacity, α=0.83, β=5.5. Active pacers reduce the congestion factor proportional to their penetration rate, calibrated from CIRCLES data (pacer_alpha=2.25, capped at 50% reduction).
+
+## Key Results (200 agents, 3-hour window)
+
+| Scenario | Peak CF | Avg Travel Time | Change |
+|----------|---------|----------------|--------|
+| No incentives | 2.02x | 4.2 min | — |
+| Pacer only | 1.72x | 4.0 min | −6.9% |
+| Carpool only | 1.03x | 3.7 min | −12.6% |
+| All three | 1.00x | 3.7 min | −12.6% |
+
+## Data Pipeline
+
+The `dbt/` directory contains a dbt Core + DuckDB transformation pipeline:
+
+```bash
+cd dbt && dbt build
+```
+
+Layers: staging (raw cleaning) → intermediate (feature engineering) → marts (analytics-ready facts/dimensions).
