@@ -506,6 +506,26 @@ class Trajectories:
         hours = (t[-1] - t[0]) / 3600.0
         return float(crossings / hours) if hours > 0 else float("nan")
 
+    def edie(self, after: float = 0.0) -> tuple[float, float]:
+        """Edie's generalized (flow [veh/h], density [veh/km]) over the window.
+
+        q = total distance travelled / (L*T), k = total time spent / (L*T).
+        Robust to trajectory fragmentation, unlike point-crossing counts, as
+        long as coverage is spatially uniform. Works on ring and open roads.
+        """
+        m = self.t >= after
+        t, x, v = self.t[m], self.x[m], self.v[m]
+        if len(t) < 2:
+            return float("nan"), float("nan")
+        dt = float(np.median(np.diff(t)))
+        ok = np.isfinite(v)
+        dist = float(np.nansum(np.where(ok, v, 0.0)) * dt)  # metres
+        time_spent = float(ok.sum() * dt)  # vehicle-seconds
+        area = self.length * (t[-1] - t[0])  # metre-seconds
+        q = dist / area * 3600.0
+        k = time_spent / area * 1000.0
+        return q, k
+
     def fuel_proxy(self, after: float = 0.0) -> float:
         """Mean absolute acceleration [m/s^2], a standard comfort/fuel proxy."""
         m = self.t >= after
@@ -586,10 +606,13 @@ def estimate_wave_speed(
 
 def summarize(traj: Trajectories, after: float = 0.0) -> dict[str, float]:
     """Headline wave statistics for a run."""
+    q, k = traj.edie(after)
     return {
         "mean_speed_mps": traj.mean_speed(after),
         "speed_std_mps": traj.speed_std(after),
         "throughput_vph": traj.throughput_vph(after=after),
+        "edie_flow_vph": q,
+        "edie_density_vpkm": k,
         "mean_abs_accel": traj.fuel_proxy(after),
         "wave_speed_kmh": estimate_wave_speed(traj, after=after),
     }

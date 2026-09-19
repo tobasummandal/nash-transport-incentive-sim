@@ -59,11 +59,25 @@ UNSTABLE = IDMParams(v0=30, T=1.6, a=0.73, b=1.67, s0=2, length=5)
 
 
 def iter_records(path: Path) -> Iterator[dict]:
-    """Stream top-level records from a MOTION JSON array."""
+    """Stream top-level records from a MOTION JSON array.
+
+    Accepts a ``.json`` file or a ``.zip`` containing one; the zip member is
+    streamed without extraction because a day of INCEPTION is ~20+ GB raw.
+    """
     import ijson
 
-    with open(path, "rb") as f:
-        yield from ijson.items(f, "item", use_float=True)
+    if path.suffix.lower() == ".zip":
+        import zipfile
+
+        with zipfile.ZipFile(path) as zf:
+            members = [m for m in zf.namelist() if m.lower().endswith(".json")]
+            if len(members) != 1:
+                raise ValueError(f"expected one .json in {path}, found {members}")
+            with zf.open(members[0]) as f:
+                yield from ijson.items(f, "item", use_float=True)
+    else:
+        with open(path, "rb") as f:
+            yield from ijson.items(f, "item", use_float=True)
 
 
 def local_window_to_unix(
@@ -97,7 +111,7 @@ def load_window(
     samples fall in that lane's band; lane-changers are dropped so the
     single-lane simulation has a like-for-like comparison.
     """
-    cache_path = path.with_suffix(f".dir{direction}.lane{lane}.parquet")
+    cache_path = path.parent / f"{path.stem}.dir{direction}.lane{lane}.parquet"
     if cache and cache_path.exists():
         df = pd.read_parquet(cache_path)
     else:
@@ -190,6 +204,68 @@ def matched_simulation(
     return road.run(float(obs.t[-1]), record_every=float(np.median(np.diff(obs.t))))
 
 
+def fit_bottleneck(
+    obs: Trajectories,
+    factors=(0.15, 0.25, 0.35),
+    inflows=(1200.0, 1500.0, 1800.0, 2100.0),
+    fit_duration: float = 3600.0,
+    warmup: float = 900.0,
+    seed: int = 1,
+    verbose: bool = True,
+) -> tuple[tuple[float, float, float], float, list[dict]]:
+    """Grid-search a downstream bottleneck so the open road matches MOTION.
+
+    The observed window sits inside a congested region whose cause is
+    downstream of it, so the bottleneck is placed over the last 10% of the
+    road. Objective uses only coverage-invariant statistics (mean speed and
+    speed std): v1.0 fragmentation biases absolute flow and density low by
+    an unknown coverage factor, so Edie q and k cannot be matched directly.
+    Returns (bottleneck, inflow_vph, rows).
+    """
+    v_obs, s_obs = obs.mean_speed(), obs.speed_std()
+    xs, xe = obs.length * 0.9, obs.length
+    rows, best, best_err = [], None, np.inf
+    for f in factors:
+        for inflow in inflows:
+            road = OpenRoad(length=obs.length, inflow_vph=inflow, params=UNSTABLE,
+                            bottleneck=(xs, xe, f), seed=seed)
+            tr = road.run(fit_duration, record_every=1.0)
+            v, sd = tr.mean_speed(after=warmup), tr.speed_std(after=warmup)
+            q, k = tr.edie(after=warmup)
+            err = abs(v - v_obs) / v_obs + abs(sd - s_obs) / s_obs
+            rows.append(dict(factor=f, inflow=inflow, density=k, flow=q,
+                             mean_speed=v, speed_std=sd, err=err))
+            if verbose:
+                print(f"  f={f:.2f} inflow={inflow:.0f} -> v={v:.1f} (obs {v_obs:.1f}) "
+                      f"std={sd:.2f} (obs {s_obs:.2f}) q={q:.0f} k={k:.1f} err={err:.3f}")
+            if err < best_err:
+                best_err, best = err, ((xs, xe, f), inflow)
+    return best[0], best[1], rows
+
+
+def plot_side_by_side(obs: Trajectories, sim: Trajectories, out: Path, title_obs: str) -> None:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
+    for ax, tr, title in zip(axes, (obs, sim), (title_obs, "IDM open road, fitted bottleneck")):
+        for i in range(tr.n_vehicles):
+            ok = ~np.isnan(tr.x[:, i])
+            if ok.sum() < 2:
+                continue
+            ax.scatter(tr.t[ok] / 60, tr.x[ok, i] / 1000, c=tr.v[ok, i] * 2.237,
+                       cmap="RdYlGn", vmin=0, vmax=70, s=0.3, linewidths=0)
+        ax.set_title(title)
+        ax.set_xlabel("Time (min)")
+    axes[0].set_ylabel("Distance along travel direction (km)")
+    sm = plt.cm.ScalarMappable(cmap="RdYlGn", norm=plt.Normalize(0, 70))
+    fig.colorbar(sm, ax=axes, label="Speed (mph)", fraction=0.03)
+    fig.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 def ks_speed(a: Trajectories, b: Trajectories) -> float:
     from scipy.stats import ks_2samp
 
@@ -247,6 +323,8 @@ def main() -> None:
     ap.add_argument("--pacer-fraction", type=float, default=0.0)
     ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("--plot", type=Path, help="write MOTION time-space PNG here")
+    ap.add_argument("--fit", action="store_true", help="grid-fit a downstream bottleneck")
+    ap.add_argument("--compare-plot", type=Path, help="side-by-side MOTION vs sim PNG")
     args = ap.parse_args()
 
     t0 = t1 = None
@@ -271,8 +349,23 @@ def main() -> None:
         plot_timespace(obs, args.plot, f"I-24 MOTION {args.path.name}, dir {args.direction}, lane {args.lane}")
         print("wrote", args.plot)
 
-    sim = matched_simulation(obs, pacer_fraction=args.pacer_fraction)
-    print(compare(obs, sim, warmup=args.warmup).round(3).to_string())
+    if args.fit:
+        print("fitting bottleneck...")
+        bn, inflow, _ = fit_bottleneck(obs)
+        print(f"best: bottleneck={bn}, inflow={inflow:.0f} vph")
+        road = OpenRoad(length=obs.length, inflow_vph=inflow, params=UNSTABLE,
+                        pacer_fraction=args.pacer_fraction,
+                        controller_factory=lambda: FollowerStopperController(tau=40),
+                        bottleneck=bn, seed=1)
+        sim = road.run(float(obs.t[-1]), record_every=1.0)
+    else:
+        sim = matched_simulation(obs, pacer_fraction=args.pacer_fraction)
+    warm = args.warmup if args.fit else args.warmup
+    print(compare(obs, sim, warmup=warm).round(3).to_string())
+    if args.compare_plot:
+        plot_side_by_side(obs, sim, args.compare_plot,
+                          f"I-24 MOTION 2022-11-29 WB lane {args.lane}, MM {args.mm_min}-{args.mm_max}")
+        print("wrote", args.compare_plot)
 
 
 if __name__ == "__main__":

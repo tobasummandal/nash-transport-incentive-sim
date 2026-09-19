@@ -34,11 +34,55 @@ coupling plan. Each with the numbers to validate against.
 
 Three seeds each. The wave speed sits in the published 10–20 km/h band.
 
-**MOTION harness skeleton** (`scripts/validate_motion.py`). Loads a
-trajectory table, re-bases position, resamples to 1 Hz, computes the same
-statistics as the simulation, runs a matched `OpenRoad`, prints a
-side-by-side table with relative error and a KS statistic on speeds.
-Column names are arguments because the file format is unconfirmed.
+**I-24 MOTION validation, first pass** (`scripts/validate_motion.py`,
+`report/figures/motion_timespace.png`, `motion_vs_sim.png`).
+INCEPTION v1.0, Tuesday 29 Nov 2022 (`63858a2cfb3ff533c12df166__post9`),
+westbound lane 3, MM 59.3–61.2 (stops short of the pole-25 gap at 61.4),
+06:30–08:30 CST. Streamed from the 20 GB JSON inside the zip; 830,415
+records parsed, 67,921 westbound lane-3 fragments kept, 20,248 in the window.
+
+| Quantity, observed | Value |
+|---|---|
+| Backward wave speed | −22 to −25 km/h, stable across estimator settings and both hours |
+| Speed std across samples | 5.2 m/s |
+| Mean / median speed | 7.6 m/s / 15.8 mph |
+| Mean abs acceleration | 0.40 m/s² |
+
+Wave speed sits at the fast end of the published 15–25 km/h range for
+I-24 and well above the ring-road IDM value (−13 km/h). Our own time-space
+plot reproduces the official `_wb_L003_speed.png` wave train.
+
+One data-handling result worth knowing: v1.0 trajectories in congestion
+are short fragments (median 11 s, 0.06 mi), so point-crossing throughput
+undercounts by 4–5×. Flow and density are therefore computed with Edie's
+generalized definitions over the space-time window, which are
+fragment-robust. Added to `Trajectories.edie()` with a ring-road
+consistency test.
+
+Coverage check: Edie flow on the window is ~400 vph against a plausible
+~1500 vph for a congested lane, so roughly a quarter of vehicle-time is
+captured. Absolute flow and density from v1.0 in congestion are therefore
+not usable as fit targets; mean speed, speed std, acceleration, and wave
+speed are coverage-invariant and are what the comparison uses.
+
+**Matched simulation** (`docs/figures/motion_vs_sim.png`). `OpenRoad` of
+the same length and duration, Treiber IDM (a=0.73, T=1.6), downstream
+bottleneck over the last 10% grid-fitted on mean speed and speed std.
+Best fit: speed factor 0.35, inflow 1500 vph.
+
+| Statistic | MOTION | IDM open road | Rel. error |
+|---|---|---|---|
+| Mean speed (m/s) | 7.35 | 7.40 | +1% |
+| Speed std (m/s) | 4.85 | 4.30 | −11% |
+| Mean abs accel (m/s²) | 0.40 | 0.38 | −4% |
+| Wave speed (km/h) | −24.8 | −11.0 | −56% |
+| KS statistic on speeds | | | 0.10 |
+
+Speed level, variance, and acceleration match. Wave speed does not, and
+the time-space plot shows why: the simulated wave train is too regular,
+too frequent (period ~2 min vs 5–8 min observed), and too slow. IDM's
+wave speed is set by (vehicle length + s0) / T, so this is a headway
+calibration problem, not a bottleneck problem. That is the next task.
 
 ## Two results worth discussing
 
@@ -55,17 +99,21 @@ Column names are arguments because the file format is unconfirmed.
 
 ## Not done
 
-- Open-road dose-response. On a ring with one wave, one pacer is enough.
-  Open freeways have wave trains; the penetration question is open and is
-  the actual contribution. Needs a bottleneck profile from MOTION to be
-  meaningful.
+- Open-road dose-response with the fitted bottleneck. On a ring with one
+  wave, one pacer is enough. The MOTION window has a wave every 5–8 min;
+  the penetration question is open and is the actual contribution.
+- Second day (22 or 30 Nov) and a second lane as replication.
+- IDM parameter calibration to MOTION (T, a, s0) so the simulated wave
+  speed matches −22 to −25 km/h rather than −11, and wave period matches
+  5–8 min. Possibly needs driver noise or heterogeneity to break the
+  perfect periodicity.
 - Micro-to-macro `c_eff(p)` fit. Depends on the open-road sweep.
 - Driver noise in IDM. Deterministic IDM gives an unrealistically clean
   0.00 std after dissipation; Stern's field ratio was ~5×.
 
 ## Asks
 
-- I-24 MOTION: one or two westbound AM-peak days with a visible
-  stop-and-go train. Coordinate convention, lane numbering, which release.
 - Whether a single-lane comparison against one MOTION lane is acceptable
   for the first validation pass, or whether lane changing has to be in.
+- Whether v1.0 fragmentation is known to bias speed statistics in
+  congestion (fragments break more when vehicles are slow and occluded).

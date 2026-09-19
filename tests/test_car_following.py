@@ -130,8 +130,16 @@ class TestRingRoad:
         s = summarize(r.run(60))
         assert set(s) == {
             "mean_speed_mps", "speed_std_mps", "throughput_vph",
+            "edie_flow_vph", "edie_density_vpkm",
             "mean_abs_accel", "wave_speed_kmh",
         }
+
+    def test_edie_matches_crossing_count_on_ring(self):
+        r = RingRoad(n_vehicles=20, length=1000, v0_cv=0.0, T_cv=0.0)
+        tr = r.run(600, perturbation=0.0)
+        q, k = tr.edie()
+        assert k == pytest.approx(20.0, rel=0.02)
+        assert q == pytest.approx(tr.throughput_vph(), rel=0.05)
 
 
 # ---------------------------------------------------------------- pacers
