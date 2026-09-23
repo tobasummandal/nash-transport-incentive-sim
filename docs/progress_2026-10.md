@@ -43,14 +43,23 @@ records parsed, 67,921 westbound lane-3 fragments kept, 20,248 in the window.
 
 | Quantity, observed | Value |
 |---|---|
-| Backward wave speed | −22 to −25 km/h, stable across estimator settings and both hours |
+| Backward wave speed, raw grid estimator | −22 to −25 km/h, stable across settings and both hours |
+| Backward wave speed, lab's ASM-smoothed field | −21 to −23 km/h (correlation), −20.5 km/h (projection) |
+| Inter-wave period at MM 60 | 4.4 min median, IQR 3.4–5.9 (troughs below 15 mph) |
 | Speed std across samples | 5.2 m/s |
 | Mean / median speed | 7.6 m/s / 15.8 mph |
 | Mean abs acceleration | 0.40 m/s² |
 
-Wave speed sits at the fast end of the published 15–25 km/h range for
-I-24 and well above the ring-road IDM value (−13 km/h). Our own time-space
-plot reproduces the official `_wb_L003_speed.png` wave train.
+Reference from the group's own wave catalog (`I24-MOTION/wave-analysis`,
+Nov 22 2022, lane 3, one week earlier): wave speed median 19.3 km/h,
+IQR 17.6–20.0; inter-wave period at MM 60 median 8.5 min, IQR 6.8–11.6.
+Three independent wave-speed methods on our window agree at 20–23 km/h,
+so the estimator is sound and the ~21 km/h figure is the one to use. The
+period gap (4.4 vs 8.5 min) is partly method (point-trough counting splits
+waves that their trajectory clustering merges) and partly day; needs the
+same method on both days before it means anything. Our time-space plot
+reproduces the official `_wb_L003_speed.png` wave train.
+See `docs/related_lab_work.md` for which lab tools were used.
 
 One data-handling result worth knowing: v1.0 trajectories in congestion
 are short fragments (median 11 s, 0.06 mi), so point-crossing throughput
@@ -75,7 +84,8 @@ Best fit: speed factor 0.35, inflow 1500 vph.
 | Mean speed (m/s) | 7.35 | 7.40 | +1% |
 | Speed std (m/s) | 4.85 | 4.30 | −11% |
 | Mean abs accel (m/s²) | 0.40 | 0.38 | −4% |
-| Wave speed (km/h) | −24.8 | −11.0 | −56% |
+| Wave speed (km/h) | −21 (ASM) | −11.0 | −48% |
+| Inter-wave period at MM 60 (min) | 4.4 | 2.8 | −36% |
 | KS statistic on speeds | | | 0.10 |
 
 Speed level, variance, and acceleration match. Wave speed does not, and
@@ -83,6 +93,7 @@ the time-space plot shows why: the simulated wave train is too regular,
 too frequent (period ~2 min vs 5–8 min observed), and too slow. IDM's
 wave speed is set by (vehicle length + s0) / T, so this is a headway
 calibration problem, not a bottleneck problem. That is the next task.
+Target: −21 km/h and a 4–8 min period.
 
 ## Two results worth discussing
 
