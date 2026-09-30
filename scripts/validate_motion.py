@@ -243,14 +243,15 @@ def fit_bottleneck(
     return best[0], best[1], rows
 
 
-def plot_side_by_side(obs: Trajectories, sim: Trajectories, out: Path, title_obs: str) -> None:
+def plot_side_by_side(obs: Trajectories, sim: Trajectories, out: Path, title_obs: str,
+                      sim_title: str = "IDM open road, fitted bottleneck") -> None:
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 6), sharey=True)
-    for ax, tr, title in zip(axes, (obs, sim), (title_obs, "IDM open road, fitted bottleneck")):
+    for ax, tr, title in zip(axes, (obs, sim), (title_obs, sim_title)):
         for i in range(tr.n_vehicles):
             ok = ~np.isnan(tr.x[:, i])
             if ok.sum() < 2:
@@ -324,6 +325,8 @@ def main() -> None:
     ap.add_argument("--no-cache", action="store_true")
     ap.add_argument("--plot", type=Path, help="write MOTION time-space PNG here")
     ap.add_argument("--fit", action="store_true", help="grid-fit a downstream bottleneck")
+    ap.add_argument("--idm-config", type=Path,
+                    help="use IDM params + bottleneck + inflow from configs/idm_calibrated.yaml")
     ap.add_argument("--compare-plot", type=Path, help="side-by-side MOTION vs sim PNG")
     args = ap.parse_args()
 
@@ -349,7 +352,20 @@ def main() -> None:
         plot_timespace(obs, args.plot, f"I-24 MOTION {args.path.name}, dir {args.direction}, lane {args.lane}")
         print("wrote", args.plot)
 
-    if args.fit:
+    if args.idm_config:
+        import yaml
+
+        cfg = yaml.safe_load(open(args.idm_config))
+        i, b = cfg["idm"], cfg["bottleneck"]
+        params = IDMParams(v0=i["v0"], T=i["T"], a=i["a"], b=i["b"], s0=i["s0"], length=i["length"])
+        bn = (obs.length * b["start_frac"], obs.length * b["end_frac"], b["v0_factor"])
+        print(f"calibrated IDM {params}, bottleneck factor {b['v0_factor']}, inflow {cfg['inflow_vph']:.0f}")
+        road = OpenRoad(length=obs.length, inflow_vph=float(cfg["inflow_vph"]), params=params,
+                        pacer_fraction=args.pacer_fraction,
+                        controller_factory=lambda: FollowerStopperController(tau=40),
+                        bottleneck=bn, seed=1)
+        sim = road.run(float(obs.t[-1]), record_every=1.0)
+    elif args.fit:
         print("fitting bottleneck...")
         bn, inflow, _ = fit_bottleneck(obs)
         print(f"best: bottleneck={bn}, inflow={inflow:.0f} vph")
@@ -360,11 +376,15 @@ def main() -> None:
         sim = road.run(float(obs.t[-1]), record_every=1.0)
     else:
         sim = matched_simulation(obs, pacer_fraction=args.pacer_fraction)
-    warm = args.warmup if args.fit else args.warmup
-    print(compare(obs, sim, warmup=warm).round(3).to_string())
+    print(compare(obs, sim, warmup=args.warmup).round(3).to_string())
+    n_o, per_o = obs.wave_period(x_probe=(61.2 - 60.0) * 1609.34, after=args.warmup)
+    n_s, per_s = sim.wave_period(x_probe=(61.2 - 60.0) * 1609.34, after=args.warmup)
+    print(f"wave period at MM60: MOTION {per_o/60:.1f} min ({n_o} waves), sim {per_s/60:.1f} min ({n_s} waves)")
     if args.compare_plot:
         plot_side_by_side(obs, sim, args.compare_plot,
-                          f"I-24 MOTION 2022-11-29 WB lane {args.lane}, MM {args.mm_min}-{args.mm_max}")
+                          f"I-24 MOTION 2022-11-29 WB lane {args.lane}, MM {args.mm_min}-{args.mm_max}",
+                          sim_title="IDM open road, calibrated (T=%.1f, a=%.2f), fitted bottleneck" % (params.T, params.a)
+                          if args.idm_config else "IDM open road, fitted bottleneck")
         print("wrote", args.compare_plot)
 
 

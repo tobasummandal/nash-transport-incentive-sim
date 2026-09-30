@@ -6,6 +6,7 @@ Provides travel time estimation based on distance and congestion levels.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -46,6 +47,23 @@ class Corridor:
     active_pacers: int = 0
     pacer_alpha: float = 2.25
 
+    # Microscopically fitted alternative. ``pacer_model="micro"`` raises the
+    # effective capacity by c_eff(p) = 1 + kappa * (1 - exp(-p / p0)) where
+    # p is pacer penetration. kappa and p0 come from the IDM open-road sweep
+    # (scripts/experiments/open_road_sweep.py, configs/ceff.yaml), so the
+    # pacer enters the BPR travel-time function through the same capacity
+    # term as every other mechanism instead of a hand-set reduction.
+    pacer_model: str = "linear"
+    ceff_kappa: float = 0.0
+    ceff_p0: float = 0.05
+
+    def effective_capacity_multiplier(self) -> float:
+        """c_eff(p) for the current pacer penetration (1.0 when no pacers)."""
+        if self.pacer_model != "micro" or self.active_pacers <= 0 or self.current_volume <= 0:
+            return 1.0
+        p = min(1.0, self.active_pacers / self.current_volume)
+        return 1.0 + self.ceff_kappa * (1.0 - math.exp(-p / self.ceff_p0))
+
     def get_travel_time(self, congestion_factor: float = 1.0) -> float:
         """Get travel time in seconds given congestion."""
         effective_speed = self.free_flow_speed / max(1.0, congestion_factor)
@@ -66,11 +84,11 @@ class Corridor:
         resulting congestion factor, modeling the wave-dampening effect
         observed in the CIRCLES field experiment on I-24 (Nov 2022).
         """
-        inst_cap = self._instantaneous_capacity()
+        inst_cap = self._instantaneous_capacity() * self.effective_capacity_multiplier()
         vc_ratio = self.current_volume / max(1.0, inst_cap)
         raw_cf = 1.0 + self.bpr_alpha * (vc_ratio ** self.bpr_beta)
 
-        if self.active_pacers > 0 and self.current_volume > 0:
+        if self.pacer_model == "linear" and self.active_pacers > 0 and self.current_volume > 0:
             penetration = self.active_pacers / self.current_volume
             reduction = min(0.5, self.pacer_alpha * penetration)
             excess = raw_cf - 1.0

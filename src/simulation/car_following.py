@@ -526,6 +526,47 @@ class Trajectories:
         k = time_spent / area * 1000.0
         return q, k
 
+    def wave_period(
+        self,
+        x_probe: Optional[float] = None,
+        after: float = 0.0,
+        v_threshold: float = 15 * 0.44704,
+        smooth_s: float = 30.0,
+        min_separation_s: float = 60.0,
+        n_bins: int = 100,
+    ) -> tuple[int, float]:
+        """Count waves passing a fixed point and return (count, median period [s]).
+
+        A wave is a trough in the spatially averaged speed series at
+        ``x_probe`` (default mid-road) that drops below ``v_threshold``.
+        Same definition is applied to observed and simulated fields so the
+        comparison is like-for-like. Returns (0, nan) when fewer than two
+        troughs are found.
+        """
+        from scipy.ndimage import uniform_filter1d
+        from scipy.signal import find_peaks
+
+        t, c, g = self.speed_grid(n_bins=n_bins)
+        m = t >= after
+        t, g = t[m], g[m]
+        if len(t) < 3:
+            return 0, float("nan")
+        if x_probe is None:
+            x_probe = 0.5 * self.length
+        j = int(np.argmin(np.abs(c - x_probe)))
+        s = np.nanmean(g[:, max(0, j - 3): j + 4], axis=1)
+        fill = np.nanmean(s) if np.isfinite(s).any() else 0.0
+        s = np.where(np.isnan(s), fill, s)
+        dt = float(np.median(np.diff(t)))
+        s = uniform_filter1d(s, size=max(1, int(round(smooth_s / dt))))
+        troughs, _ = find_peaks(
+            -s, height=-v_threshold, distance=max(1, int(round(min_separation_s / dt))),
+            prominence=1.5,
+        )
+        if len(troughs) < 2:
+            return int(len(troughs)), float("nan")
+        return int(len(troughs)), float(np.median(np.diff(t[troughs])))
+
     def fuel_proxy(self, after: float = 0.0) -> float:
         """Mean absolute acceleration [m/s^2], a standard comfort/fuel proxy."""
         m = self.t >= after
@@ -602,6 +643,42 @@ def estimate_wave_speed(
         return float("nan")
     speed_ms = float(np.median(shifts)) * dx / (k_lag * dt)
     return speed_ms * 3.6
+
+
+def estimate_wave_speed_projection(
+    traj: Trajectories,
+    after: float = 0.0,
+    n_bins: int = 100,
+    speeds_kmh: Optional[np.ndarray] = None,
+) -> float:
+    """Wave speed [km/h] by Radon-style projection of the speed field.
+
+    For each candidate propagation speed c, shift every spatial column by
+    x / c in time and average across columns; the c that maximises the
+    variance of the averaged profile is the speed at which the jam bands
+    line up. Continuous in c (no bin/lag quantisation), so it is the
+    estimator to use for calibration. Negative = upstream-moving.
+    """
+    t, centres, grid = traj.speed_grid(n_bins=n_bins)
+    m = t >= after
+    t, grid = t[m], grid[m]
+    if len(t) < 3 or not np.isfinite(grid).any():
+        return float("nan")
+    fill = np.nanmean(grid)
+    g = np.where(np.isfinite(grid), grid, fill)
+    if speeds_kmh is None:
+        speeds_kmh = np.arange(-40.0, -4.0, 0.25)
+    best_c, best_score = float("nan"), -np.inf
+    for c in speeds_kmh:
+        shift = (centres / 1000.0) / c * 3600.0  # seconds
+        prof = np.array([
+            np.interp(t + shift[j], t, g[:, j], left=np.nan, right=np.nan)
+            for j in range(len(centres))
+        ])
+        score = float(np.nanvar(np.nanmean(prof, axis=0)))
+        if score > best_score:
+            best_score, best_c = score, float(c)
+    return best_c
 
 
 def summarize(traj: Trajectories, after: float = 0.0) -> dict[str, float]:

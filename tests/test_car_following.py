@@ -18,6 +18,7 @@ from src.simulation.car_following import (
     RingRoad,
     SmoothedVelocityController,
     estimate_wave_speed,
+    estimate_wave_speed_projection,
     idm_acceleration,
     summarize,
 )
@@ -110,6 +111,15 @@ class TestRingRoad:
         w = estimate_wave_speed(tr, after=1200, n_bins=50)
         # Published stop-and-go wave speeds: roughly -10 to -20 km/h.
         assert -22.0 < w < -8.0
+
+    def test_projection_estimator_agrees_on_ring(self):
+        r = RingRoad(n_vehicles=40, length=1000, params=UNSTABLE,
+                     v0_cv=0.05, T_cv=0.05, seed=1)
+        tr = r.run(2400, perturbation=3.0, record_every=0.5)
+        w_corr = estimate_wave_speed(tr, after=1200, n_bins=50)
+        w_proj = estimate_wave_speed_projection(tr, after=1200, n_bins=50)
+        assert -22.0 < w_proj < -8.0
+        assert abs(w_proj - w_corr) < 5.0
 
     def test_sparse_ring_is_stable(self):
         r = RingRoad(n_vehicles=10, length=1000, params=UNSTABLE,

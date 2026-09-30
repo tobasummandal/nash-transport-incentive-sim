@@ -95,6 +95,58 @@ wave speed is set by (vehicle length + s0) / T, so this is a headway
 calibration problem, not a bottleneck problem. That is the next task.
 Target: −21 km/h and a 4–8 min period.
 
+**IDM calibration** (`scripts/experiments/calibrate_idm.py`,
+`configs/idm_calibrated.yaml`). Grid over T ∈ [0.8, 1.6], a ∈ [0.5, 1.5],
+s0 ∈ {1, 2}, each with its own bottleneck refit, scored on wave speed and
+period with a continuous projection estimator (the bin-correlation one
+quantises at 3.7 km/h and cannot rank headways). Best: T = 1.0 s,
+a = 1.0 m/s², s0 = 2 m, bottleneck factor 0.25, inflow 1800 vph.
+
+| Statistic (2 h window, 15 min warmup) | MOTION | Treiber IDM (T=1.6) | Calibrated (T=1.0) |
+|---|---|---|---|
+| Wave speed (km/h) | −21 | −11 | −16.5 |
+| Period at MM 60 (min) | 3.8 | 2.8 | 2.5 |
+| Mean speed (m/s) | 7.35 | 7.40 | 5.8 |
+| Speed std (m/s) | 4.85 | 4.30 | 5.1 |
+| Mean abs accel (m/s²) | 0.40 | 0.38 | 0.47 |
+| KS on speeds | | 0.10 | 0.28 |
+
+Calibration closes about half the wave-speed gap at the cost of mean
+speed (−21%) and speed-distribution fit (KS 0.28 vs 0.10). Shorter
+headways or smaller gaps than this make homogeneous IDM lose its waves
+entirely, so the remaining gap needs driver heterogeneity or noise, not
+more tuning. Both parameter sets are kept; the sweep below uses the
+calibrated one because wave physics is what the pacer acts on.
+
+**Open-road pacer sweep** (`scripts/experiments/open_road_sweep.py`,
+`docs/figures/open_road_dose_response.png`, `configs/ceff*.yaml`).
+Calibrated road, FollowerStopper pacers at 0–20% penetration, three
+seeds, three controller time constants. Throughput is Edie flow over the
+downstream half (fully observed in simulation, so unbiased).
+
+| Penetration | Throughput | Speed std | Mean abs accel |
+|---|---|---|---|
+| 2% | −5 to −7% | −35% | −55 to −65% |
+| 5% | −8 to −13% | −45% | −80 to −90% |
+| 10% | −13 to −26% | −50% | −90% |
+
+Ranges span tau = 10, 15, 40 s. The direction does not depend on the
+controller: on a bottleneck-fed open road, pacers smooth traffic and
+reduce throughput, because they hold upstream flow below what the
+bottleneck can pass and density rises behind them. This is the opposite
+sign from the ring, where the single wave is the only thing limiting
+flow. Fitted c_eff(p) = 1 + κ(1 − e^(−p/p₀)) with κ = −0.34, p₀ = 0.156
+at tau = 15 (`configs/ceff_tau15.yaml`).
+
+**Macro coupling.** `Corridor` now has `pacer_model = "micro"` which
+scales BPR capacity by c_eff(p) (`src/simulation/network.py`,
+`tests/test_network_ceff.py`). `configs/pacer_i24.yaml` is switched to
+it. The pacer therefore enters Table 5 through the same travel-time
+function as every other mechanism, and with the fitted sign it will
+raise travel time, not lower it. The pacer's benefit is in braking and
+speed variance (fuel, comfort, safety), which the BPR layer does not
+price. Table 5 needs a column for that before the comparison is fair.
+
 ## Two results worth discussing
 
 1. **Dissipation needs slow adaptation.** A pacer whose target speed
@@ -110,17 +162,14 @@ Target: −21 km/h and a 4–8 min period.
 
 ## Not done
 
-- Open-road dose-response with the fitted bottleneck. On a ring with one
-  wave, one pacer is enough. The MOTION window has a wave every 5–8 min;
-  the penetration question is open and is the actual contribution.
+- Driver heterogeneity / noise in IDM to close the remaining wave-speed
+  gap (−16 vs −21 km/h) and break the perfect periodicity.
 - Second day (22 or 30 Nov) and a second lane as replication.
-- IDM parameter calibration to MOTION (T, a, s0) so the simulated wave
-  speed matches −22 to −25 km/h rather than −11, and wave period matches
-  5–8 min. Possibly needs driver noise or heterogeneity to break the
-  perfect periodicity.
-- Micro-to-macro `c_eff(p)` fit. Depends on the open-road sweep.
-- Driver noise in IDM. Deterministic IDM gives an unrealistically clean
-  0.00 std after dissipation; Stern's field ratio was ~5×.
+- Re-run Table 5 with the micro pacer model and add a braking /
+  speed-variance column so the pacer is scored on what it actually does.
+- Controllers designed not to lose throughput (CIRCLES-style), to see
+  whether the smoothing-vs-throughput trade is intrinsic or a
+  FollowerStopper property.
 
 ## Asks
 

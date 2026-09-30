@@ -15,6 +15,11 @@ simulation:
 
 network:
   type: "i24"
+  # Pacer effect on capacity, fitted from the IDM open-road sweep
+  # (scripts/experiments/open_road_sweep.py). Replaces the hand-set
+  # linear reduction. See docs/progress_2026-10.md for the numbers.
+  pacer_model: "micro"
+  ceff_file: "configs/ceff_tau15.yaml"
   corridor:
     name: "I-24 Inbound"
     length_miles: 15.0

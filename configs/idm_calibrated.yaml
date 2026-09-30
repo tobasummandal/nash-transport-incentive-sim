@@ -1,0 +1,23 @@
+idm:
+  v0: 30.0
+  T: 1.0
+  a: 1.0
+  b: 1.67
+  s0: 2.0
+  length: 5.0
+bottleneck:
+  start_frac: 0.9
+  end_frac: 1.0
+  v0_factor: 0.25
+inflow_vph: 1800.0
+targets:
+  wave_kmh: -21.0
+  period_s: 264.0
+  mean_speed: 7.35
+  speed_std: 4.85
+achieved:
+  wave_kmh: -16.0
+  period_s: 200.9999999998172
+  mean_speed: 5.987238456320223
+  speed_std: 5.378622959672936
+source: scripts/experiments/calibrate_idm.py vs I-24 MOTION 2022-11-29 WB lane 3

@@ -81,6 +81,7 @@ def create_network(config: dict[str, Any]):
             corridor.free_flow_speed = corridor_config.get("free_flow_speed_mph", corridor.free_flow_speed)
             corridor.capacity_vph = corridor_config.get("capacity_vph", corridor.capacity_vph)
             corridor.num_lanes = corridor_config.get("num_lanes", corridor.num_lanes)
+            _apply_pacer_model(corridor, network_config)
 
         return network
 
@@ -100,6 +101,31 @@ def create_network(config: dict[str, Any]):
                 )
             )
         return network
+
+
+def _apply_pacer_model(corridor, network_config: dict[str, Any]) -> None:
+    """Switch a corridor to the microscopically fitted pacer capacity curve.
+
+    ``network.pacer_model: micro`` plus either inline ``ceff_kappa`` /
+    ``ceff_p0`` or ``ceff_file: configs/ceff.yaml`` (written by
+    scripts/experiments/open_road_sweep.py).
+    """
+    model = network_config.get("pacer_model", "linear")
+    if model != "micro":
+        return
+    kappa = network_config.get("ceff_kappa")
+    p0 = network_config.get("ceff_p0")
+    ceff_file = network_config.get("ceff_file")
+    if ceff_file and (kappa is None or p0 is None):
+        with open(ceff_file) as f:
+            fitted = yaml.safe_load(f)
+        kappa = fitted["ceff_kappa"] if kappa is None else kappa
+        p0 = fitted["ceff_p0"] if p0 is None else p0
+    if kappa is None or p0 is None:
+        raise ValueError("pacer_model: micro needs ceff_kappa/ceff_p0 or ceff_file")
+    corridor.pacer_model = "micro"
+    corridor.ceff_kappa = float(kappa)
+    corridor.ceff_p0 = float(p0)
 
 
 def create_agents(config: dict[str, Any], n_agents: int, rng: np.random.Generator):

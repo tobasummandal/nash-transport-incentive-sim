@@ -1,0 +1,25 @@
+pacer_model: micro
+ceff_kappa: -0.4137487487821907
+ceff_p0: 0.12162610270376993
+baseline_downstream_flow_vph: 1396.0254887636256
+source: scripts/experiments/open_road_sweep.py on configs/idm_calibrated.yaml
+fractions:
+- 0.0
+- 0.01
+- 0.02
+- 0.03
+- 0.05
+- 0.075
+- 0.1
+- 0.15
+- 0.2
+throughput_ratio:
+- 1.0
+- 0.9581435501709267
+- 0.9270808328095175
+- 0.9141541274491708
+- 0.8729516072993518
+- 0.8027799194332833
+- 0.7448408325283981
+- 0.7478144819259721
+- 0.6465282373366877
