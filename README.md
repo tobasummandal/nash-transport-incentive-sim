@@ -35,10 +35,10 @@ Agent-based simulation for evaluating incentive mechanisms (carpooling, pacer dr
 | Mechanism | How it works | Effect |
 |-----------|-------------|--------|
 | **Carpooling** | Reward per passenger ($2.50 default) | Removes vehicles from corridor |
-| **Pacer driving** | Reward per mile ($0.15) for smooth driving | Dampens stop-and-go waves (CIRCLES-calibrated) |
+| **Pacer driving** | Reward per mile ($0.15) for smooth driving | Dampens stop-and-go waves; effect on capacity fitted from the IDM car-following layer |
 | **Departure shift** | Reward for moving peak departure to shoulder period | Spreads demand across time |
 
-The pacer congestion model is calibrated from the [CIRCLES Consortium](https://circles-consortium.github.io/) I-24 field experiment (Nov 2022), where 100 AI-equipped vehicles achieved 9.1% fuel efficiency improvement at 4% penetration rate.
+The pacer's effect is grounded in a microscopic car-following layer (`src/simulation/car_following.py`) validated against [I-24 MOTION](https://i24motion.org) trajectories. On a bottleneck-fed open road, 5% pacer penetration cuts braking by ~80% and speed variance by ~45% but reduces throughput 8–13%; the fitted capacity curve c_eff(p) is what the BPR corridor uses. Details and figures in [`docs/progress_2026-10.md`](docs/progress_2026-10.md).
 
 ## Project Structure
 
@@ -56,7 +56,8 @@ The pacer congestion model is calibrated from the [CIRCLES Consortium](https://c
 │   │   └── temporal.py   # DepartureShiftIncentive, time slot management
 │   ├── simulation/       # Core engine
 │   │   ├── engine.py     # SimulationEngine (event loop, incentive wiring)
-│   │   ├── network.py    # Corridor with BPR congestion + pacer smoothing
+│   │   ├── network.py    # Corridor with BPR congestion + fitted pacer capacity curve
+│   │   ├── car_following.py # IDM ring/open road, pacer controllers, wave statistics
 │   │   ├── events.py     # Event types and scheduling
 │   │   ├── metrics.py    # TripRecord, MetricsCollector
 │   │   └── equilibrium.py
@@ -71,9 +72,10 @@ The pacer congestion model is calibrated from the [CIRCLES Consortium](https://c
 │   └── frontend/         # Next.js dashboard
 │       ├── app/          # Layout, page, globals.css
 │       └── components/   # Controls, CorridorViz, StatsBar
-├── tests/                # 10 test modules
+├── tests/                # 12 test modules, 321 tests
 ├── dbt/                  # dbt Core + DuckDB pipeline
-├── scripts/              # CLI tools (run_simulation, experiments, etc.)
+├── scripts/              # run_simulation, validate_motion (I-24 MOTION harness), experiments/
+├── docs/                 # progress notes, claim triage, reading notes, figures
 ├── configs/              # YAML simulation configs
 ├── report/               # LaTeX paper + figures
 └── hytch data info/      # Hytch data documentation
@@ -141,16 +143,37 @@ The corridor uses a BPR (Bureau of Public Roads) volume-delay function with inst
 congestion_factor = 1 + α × (V/C)^β
 ```
 
-where V is current vehicle count, C is instantaneous capacity, α=0.83, β=5.5. Active pacers reduce the congestion factor proportional to their penetration rate, calibrated from CIRCLES data (pacer_alpha=2.25, capped at 50% reduction).
+where V is current vehicle count, C is instantaneous capacity, α=0.83, β=5.5.
 
-## Key Results (200 agents, 3-hour window)
+Pacers enter through the capacity term. With `pacer_model: micro` (the default in `configs/pacer_i24.yaml`), C is scaled by c_eff(p) = 1 + κ(1 − e^(−p/p₀)) where p is pacer penetration and κ, p₀ come from the open-road sweep in `scripts/experiments/open_road_sweep.py` (`configs/ceff_tau15.yaml`: κ = −0.34, p₀ = 0.156). The older hand-set linear reduction is still available as `pacer_model: linear`.
+
+### Microscopic layer and I-24 MOTION validation
+
+`src/simulation/car_following.py` implements IDM vehicles on a ring road and an open road with pluggable pacer controllers (FollowerStopper after Stern et al. 2018). `scripts/validate_motion.py` streams I-24 MOTION INCEPTION trajectories and compares wave speed, speed distribution, and acceleration against a matched simulation. Calibrated parameters are in `configs/idm_calibrated.yaml`.
+
+```bash
+python -m scripts.experiments.ring_road                # ring-road wave dissipation
+python -m scripts.validate_motion data/motion/<file>.zip --direction -1 --lane 3 \
+    --mm-min 59.3 --mm-max 61.2 --date 2022-11-29 --t-start 06:30 --t-end 08:30 \
+    --idm-config configs/idm_calibrated.yaml --compare-plot report/figures/motion_vs_sim.png
+python -m scripts.experiments.calibrate_idm            # IDM grid vs MOTION wave statistics
+python -m scripts.experiments.open_road_sweep --tau 15 # pacer penetration sweep, writes configs/ceff*.yaml
+```
+
+MOTION data is downloaded from https://i24motion.org/data (account required) into `data/motion/`, which is gitignored.
+
+## Key Results
+
+Macroscopic results (200 agents, 3-hour window) were produced with the earlier linear pacer model and are being re-run with the fitted curve; the pacer row below will change sign on travel time. See `docs/claim_triage.md` for which earlier claims survive.
 
 | Scenario | Peak CF | Avg Travel Time | Change |
 |----------|---------|----------------|--------|
 | No incentives | 2.02x | 4.2 min | — |
-| Pacer only | 1.72x | 4.0 min | −6.9% |
+| Pacer only (linear model, superseded) | 1.72x | 4.0 min | −6.9% |
 | Carpool only | 1.03x | 3.7 min | −12.6% |
 | All three | 1.00x | 3.7 min | −12.6% |
+
+Microscopic results against I-24 MOTION (29 Nov 2022, WB lane 3): observed wave speed ≈ −21 km/h; calibrated IDM reproduces −16.5 km/h. Open-road pacer sweep at 5% penetration: braking −80 to −90%, speed std −45%, throughput −8 to −13%. Figures in `docs/figures/`.
 
 ## Data Pipeline
 
