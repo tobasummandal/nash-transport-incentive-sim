@@ -10,7 +10,7 @@ IHUTE (Nashville Transportation Incentive Simulation) is an agent-based simulati
 
 ### Testing
 ```bash
-pytest tests/ -v                      # Run all tests (229 tests)
+pytest tests/ -v                      # Run all tests (314 tests)
 pytest tests/ --cov=src               # With coverage (requires pytest-cov)
 pytest tests/test_agents_base.py -v   # Single test module
 pytest tests/ -k "test_carpool"       # Tests matching pattern
@@ -105,6 +105,16 @@ cd app && gradio app.py
 - Session management with real-time feedback
 - Corridor-level performance aggregation
 
+#### Car-Following Layer (`simulation/car_following.py`)
+- **IDMParams / idm_acceleration()** - Intelligent Driver Model, vectorised
+- **RingRoad** - Periodic Sugiyama-style ring; reproduces stop-and-go waves
+- **OpenRoad** - Poisson inflow, free exit, optional bottleneck; for I-24 MOTION matching
+- **FollowerStopperController** - Stern (2018) pacer controller with slowly adapted target speed
+- **SmoothedVelocityController** - PacerProfile-style controller with a speed floor (does not dissipate)
+- **Trajectories / summarize() / estimate_wave_speed()** - wave amplitude, throughput, accel, backward wave speed
+- Experiment: `python -m scripts.experiments.ring_road`; MOTION harness: `scripts/validate_motion.py`
+- Docs: `docs/claim_triage.md`, `docs/reading_notes.md`, `docs/progress_2026-10.md`
+
 ### Other Modules
 - `simulation/` - Event-driven engine with priority queue scheduling and R-tree spatial indexing
 - `optimization/` - Budget-constrained allocation: greedy (0.63 approx), DP (optimal), genetic, online secretary
@@ -128,7 +138,7 @@ cd app && gradio app.py
 
 ## Test Coverage (`tests/`)
 
-229 tests covering:
+314 tests covering:
 - `test_agents_base.py` - Enums, dataclasses, LinearUtilityModel, BaseAgent (31 tests)
 - `test_agents_commuter.py` - CommuterProfile, CommuterAgent, population generation (28 tests)
 - `test_agents_pacer.py` - PacerProfile, PacerAgent, pacing sessions (30 tests)
@@ -136,6 +146,7 @@ cd app && gradio app.py
 - `test_incentives_base.py` - IncentiveConfig, BaseIncentive workflow (33 tests)
 - `test_incentives_carpool.py` - CarpoolMatch, eligibility, rewards, matching (26 tests)
 - `test_incentives_pacer.py` - PacerSession, sessions, corridor performance (45 tests)
+- `test_car_following.py` - IDM, ring/open road, pacer dissipation, wave speed (24 tests)
 
 ## Key Configuration
 
