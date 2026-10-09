@@ -38,7 +38,7 @@ Agent-based simulation for evaluating incentive mechanisms (carpooling, pacer dr
 | **Pacer driving** | Reward per mile ($0.15) for smooth driving | Dampens stop-and-go waves; effect on capacity fitted from the IDM car-following layer |
 | **Departure shift** | Reward for moving peak departure to shoulder period | Spreads demand across time |
 
-The pacer's effect is grounded in a microscopic car-following layer (`src/simulation/car_following.py`) validated against [I-24 MOTION](https://i24motion.org) trajectories. On a bottleneck-fed open road, 5% pacer penetration cuts braking by ~80% and speed variance by ~45% but reduces throughput 8–13%; the fitted capacity curve c_eff(p) is what the BPR corridor uses. Details and figures in [`docs/progress_2026-10.md`](docs/progress_2026-10.md).
+The pacer's effect is grounded in a microscopic car-following layer (`src/simulation/car_following.py`) validated against [I-24 MOTION](https://i24motion.org) trajectories. On a bottleneck-fed open road, 5% pacer penetration cuts braking by ~80% and speed variance by ~45% but reduces throughput 8–13%; the fitted capacity curve c_eff(p) is what the BPR corridor uses. Figures in [`docs/figures/`](docs/figures/); claim-by-claim audit of the earlier paper in [`docs/claim_triage.md`](docs/claim_triage.md).
 
 ## Project Structure
 

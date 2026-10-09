@@ -56,4 +56,4 @@ paid drivers for behaviour that cannot dissipate waves.
 
 The open road then changed the story again. Calibrated to I-24 MOTION, 5%
 pacers cut braking ~80% and speed variance ~45% but reduce throughput
-8–13%, the opposite sign from the ring. Details in `progress_2026-10.md`.
+8–13%, the opposite sign from the ring. Figures in `docs/figures/`.
