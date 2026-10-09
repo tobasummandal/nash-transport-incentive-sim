@@ -119,7 +119,7 @@ more tuning. Both parameter sets are kept; the sweep below uses the
 calibrated one because wave physics is what the pacer acts on.
 
 **Open-road pacer sweep** (`scripts/experiments/open_road_sweep.py`,
-`docs/figures/open_road_dose_response.png`, `configs/ceff*.yaml`).
+`docs/figures/open_road_dose_response.png`, `configs/ceff_tau{10,15,40}.yaml`).
 Calibrated road, FollowerStopper pacers at 0–20% penetration, three
 seeds, three controller time constants. Throughput is Edie flow over the
 downstream half (fully observed in simulation, so unbiased).

@@ -6,7 +6,7 @@ Uses the calibrated IDM parameters and fitted bottleneck from
 pacer fraction, and measures what the macroscopic model needs: throughput
 through the bottleneck (Edie flow over the downstream half), speed std,
 and mean |accel|. Fits c_eff(p) = 1 + kappa * (1 - exp(-p / p0)) to the
-throughput ratio and writes ``configs/ceff.yaml`` for ``Corridor``.
+throughput ratio and writes ``configs/ceff_tau40.yaml`` for ``Corridor``.
 
 Simulated trajectories are fully observed, so Edie flow here is unbiased
 (unlike v1.0 MOTION data).

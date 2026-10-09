@@ -50,7 +50,7 @@ class Corridor:
     # Microscopically fitted alternative. ``pacer_model="micro"`` raises the
     # effective capacity by c_eff(p) = 1 + kappa * (1 - exp(-p / p0)) where
     # p is pacer penetration. kappa and p0 come from the IDM open-road sweep
-    # (scripts/experiments/open_road_sweep.py, configs/ceff.yaml), so the
+    # (scripts/experiments/open_road_sweep.py, configs/ceff_tau40.yaml), so the
     # pacer enters the BPR travel-time function through the same capacity
     # term as every other mechanism instead of a hand-set reduction.
     pacer_model: str = "linear"

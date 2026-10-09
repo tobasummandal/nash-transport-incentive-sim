@@ -107,7 +107,7 @@ def _apply_pacer_model(corridor, network_config: dict[str, Any]) -> None:
     """Switch a corridor to the microscopically fitted pacer capacity curve.
 
     ``network.pacer_model: micro`` plus either inline ``ceff_kappa`` /
-    ``ceff_p0`` or ``ceff_file: configs/ceff.yaml`` (written by
+    ``ceff_p0`` or ``ceff_file: configs/ceff_tau40.yaml`` (written by
     scripts/experiments/open_road_sweep.py).
     """
     model = network_config.get("pacer_model", "linear")

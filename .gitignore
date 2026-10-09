@@ -178,3 +178,9 @@ secrets.yaml
 Tobasum CS 3860 Research Proposal.pdf
 report/
 hytch data info/
+# Tracked documentation figures (override the figures/ rule above)
+!docs/figures/
+!docs/figures/*.png
+
+# Local agent instructions
+CLAUDE.md
